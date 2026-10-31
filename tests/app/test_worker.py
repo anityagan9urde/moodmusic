@@ -351,3 +351,44 @@ def test_stop_joins_within_2s(qtbot, tmp_path):
     w.stop()
     assert time.monotonic() - t0 < 2.0
     assert not w.isRunning()
+
+
+def test_model_setup_failure_reports_and_retries(qtbot, tmp_path, monkeypatch):
+    from moodmusic.app import worker as wmod
+    monkeypatch.setattr(wmod, "SETUP_RETRY_S", 0.3)
+    attempts = []
+    model = FakeModel()
+
+    def model_factory():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RuntimeError("onnx missing")
+        return model
+    camera, tracker = FakeCamera(), FakeTracker()
+    w = VisionWorker(lambda: camera, lambda: tracker, model_factory, None,
+                     MoodSmoother(hold_seconds=0.0), FakeCorrections(), fps=20, clock=Clock(),
+                     sleep=lambda s: time.sleep(0.001), baseline_path=tmp_path / "b.json")
+    statuses = []
+    w.camera_status.connect(statuses.append)
+    try:
+        with qtbot.waitSignal(w.mood, timeout=5000):
+            w.start()
+    finally:
+        w.stop()
+    assert len(attempts) == 3 and statuses[0] == "model_failed"
+    assert statuses.count("model_failed") == 1 and "ok" in statuses
+    assert camera.released and tracker.closed
+
+
+def test_setup_retry_stops_promptly(qtbot, tmp_path):
+    def bad():
+        raise RuntimeError("no model")
+    w = VisionWorker(FakeCamera, FakeTracker, bad, None, MoodSmoother(hold_seconds=0.0),
+                     FakeCorrections(), fps=20, clock=Clock(),
+                     sleep=lambda s: time.sleep(0.001), baseline_path=tmp_path / "b.json")
+    with qtbot.waitSignal(w.camera_status, timeout=3000) as sig:
+        w.start()
+    assert sig.args == ["model_failed"]
+    t0 = time.monotonic()
+    w.stop()
+    assert time.monotonic() - t0 < 2.0 and not w.isRunning()

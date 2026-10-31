@@ -162,3 +162,25 @@ def test_suggest_group_tie_uses_declaration_order(lib):
 def test_suggest_group_excludes_self(lib):
     lib.upsert(song("a", group=MoodGroup.CHILL))
     assert suggest_group(song("a", group=MoodGroup.CHILL), lib) is None
+
+
+def test_suggest_groups_matches_suggest_group(lib):
+    from moodmusic.music.scanner import suggest_groups
+    songs = [
+        song("a1", artist="Alpha", group=MoodGroup.CHILL),
+        song("a2", artist="alpha, Beta", group=MoodGroup.CHILL),
+        song("a3", artist="Alpha", group=MoodGroup.UPBEAT),
+        song("a4", artist="Alpha", group=MoodGroup.UNSORTED),
+        song("b1", artist="Beta", group=MoodGroup.UPBEAT),
+        song("b2", artist="Beta", group=MoodGroup.FOCUS),
+        song("b3", artist="Beta, Alpha", group=MoodGroup.UNSORTED),
+        song("c1", artist="Gamma", group=MoodGroup.UNSORTED),
+        song("c2", artist="Gamma", group=MoodGroup.UNSORTED),
+    ]
+    for s in songs:
+        lib.upsert(s)
+    all_songs = lib.songs()
+    got = suggest_groups(all_songs)
+    want = {s.uri: suggest_group(s, lib) for s in all_songs if s.group == MoodGroup.UNSORTED}
+    assert got == want
+    assert got["a4"] == MoodGroup.CHILL and got["c1"] is None

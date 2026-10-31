@@ -18,6 +18,11 @@ BG = "#1e1e24"
 OK, WARN, ERR = QColor("#3ddc84"), QColor("#f5a623"), QColor("#e5484d")
 CHOOSE_DEVICE = "Choose a Spotify device"
 AUTH_EXPIRED = "Spotify login expired. Please log in again"
+CAMERA_MESSAGES = {
+    "unavailable": ("error", "Camera unavailable. Check it's connected and not used by another app"),
+    "reconnecting": ("warning", "Reconnecting to camera…"),
+    "model_failed": ("error", "Mood model failed to load. See the log."),
+}
 
 BUTTON_CSS = """
 QPushButton { background:#2d2d36; color:#eee; border:none; border-radius:9px; padding:3px 9px;

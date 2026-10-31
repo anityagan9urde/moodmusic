@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -57,6 +59,19 @@ def load_settings(path: Path | None = None) -> Settings:
 
 
 def save_settings(s: Settings, path: Path | None = None) -> None:
+    """Atomic: write a temp file next to the target, then os.replace() it."""
     p = _settings_path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(asdict(s), indent=2), encoding="utf-8")
+    fd, tmp = tempfile.mkstemp(prefix=".settings-", suffix=".tmp", dir=p.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(asdict(s), indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

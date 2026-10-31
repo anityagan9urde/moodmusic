@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
 from moodmusic.config import Settings, save_settings
-from moodmusic.ui.common import (BG, BUTTON_CSS, ArtLabel, DeviceButton,
+from moodmusic.ui.common import (BG, BUTTON_CSS, CAMERA_MESSAGES, ArtLabel, DeviceButton,
                                  LoginButton, ModeToggle, StatusDot, steady_text)
 from moodmusic.ui.mood_picker import MoodPicker
 
@@ -24,6 +24,7 @@ class MoodWidget(QWidget):
         self._engine, self._worker, self._clock = engine, worker, clock
         self._mood = None
         self._quality = None
+        self._camera = "ok"
         self._drag = None
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                             | Qt.WindowType.Tool)
@@ -90,6 +91,7 @@ class MoodWidget(QWidget):
         engine.listeners.append(self.refresh)
         worker.mood.connect(self._on_mood)
         worker.quality.connect(self._on_quality)
+        worker.camera_status.connect(self._on_camera_status)
         self.refresh()
 
     # ---- state ----------------------------------------------------------
@@ -101,6 +103,10 @@ class MoodWidget(QWidget):
         self._quality = report
         self.refresh()
 
+    def _on_camera_status(self, status: str) -> None:
+        self._camera = status
+        self.refresh()
+
     def refresh(self) -> None:
         status = self._engine.status
         bad_quality = self._quality is not None and not self._quality.ok
@@ -110,7 +116,9 @@ class MoodWidget(QWidget):
         elif self._mood is not None:
             self.mood_label.setText(f"{self._mood.group.emoji} {self._mood.group.label}")
             self.steady_label.setText(steady_text(self._mood.since, self._clock()))
-        if bad_quality and status.kind == "ok":
+        if self._camera in CAMERA_MESSAGES:
+            self.dot.set_status(*CAMERA_MESSAGES[self._camera])
+        elif bad_quality and status.kind == "ok":
             self.dot.set_status("warning", self._quality.issue or "")
         else:
             self.dot.set_status(status.kind, status.message)

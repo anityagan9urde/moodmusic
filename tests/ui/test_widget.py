@@ -129,3 +129,22 @@ def test_advanced_button_emits(qtbot, engine, worker):
 def test_mood_picker_has_five_options():
     assert list(mood_picker.CHOICES) == [
         MoodGroup.UPBEAT, MoodGroup.CHILL, MoodGroup.MELANCHOLY, MoodGroup.INTENSE, MoodGroup.FOCUS]
+
+
+def test_status_dot_shows_camera_problems(qtbot, engine, worker):
+    from moodmusic.ui.common import ERR, OK, WARN
+    from moodmusic.ui.widget import MoodWidget
+    w = MoodWidget(engine, worker)
+    qtbot.addWidget(w)
+    worker.camera_status.emit("unavailable")
+    assert w.dot.color == ERR
+    assert w.dot.toolTip() == ("Camera unavailable. Check it's connected and not used by "
+                               "another app")
+    engine.notify()  # engine refreshes must not hide the camera problem
+    assert w.dot.color == ERR
+    worker.camera_status.emit("reconnecting")
+    assert w.dot.color == WARN and w.dot.toolTip() == "Reconnecting to camera…"
+    worker.camera_status.emit("model_failed")
+    assert w.dot.color == ERR and w.dot.toolTip() == "Mood model failed to load. See the log."
+    worker.camera_status.emit("ok")
+    assert w.dot.color == OK and w.dot.toolTip() == "All good"

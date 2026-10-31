@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QGridLayout, QHBoxLay
 
 from moodmusic.mood.groups import MoodGroup
 from moodmusic.music.library import Song, SongLibrary
-from moodmusic.music.scanner import suggest_group
+from moodmusic.music.scanner import suggest_groups
 
 log = logging.getLogger(__name__)
 URI_ROLE = Qt.ItemDataRole.UserRole
@@ -125,16 +125,16 @@ class ReviewDialog(QDialog):
     def refresh(self) -> None:
         for lst in self.lists.values():
             lst.clear()
-        self._songs, self._suggestions = {}, {}
-        for song in sorted(self.library.songs(), key=lambda s: (s.artist.lower(), s.title.lower())):
+        songs = self.library.songs()  # read once per refresh
+        self._songs, self._suggestions = {}, suggest_groups(songs)
+        for song in sorted(songs, key=lambda s: (s.artist.lower(), s.title.lower())):
             self._songs[song.uri] = song
             lst = self.lists[song.group]
             item = QListWidgetItem()
             item.setData(URI_ROLE, song.uri)
             text = f"{song.title} - {song.artist}"
             if song.group == MoodGroup.UNSORTED:
-                sug = suggest_group(song, self.library)
-                self._suggestions[song.uri] = sug
+                sug = self._suggestions.get(song.uri)
                 if sug is not None:
                     lst.addItem(item)
                     self._set_suggestion_widget(lst, item, text, sug, song.uri)

@@ -87,16 +87,31 @@ class Scanner:
         return MoodGroup.UNSORTED, [], "none"
 
 
+def _best(counts: Counter) -> MoodGroup | None:
+    """Most common group; ties go to the group declared first in MoodGroup."""
+    if not counts:
+        return None
+    order = list(MoodGroup)
+    return max(counts, key=lambda g: (counts[g], -order.index(g)))
+
+
 def suggest_group(song: Song, library: SongLibrary) -> MoodGroup | None:
     lead = first_artist(song.artist).lower()
-    counts = Counter(
+    return _best(Counter(
         s.group
         for s in library.songs()
         if s.uri != song.uri
         and s.group != MoodGroup.UNSORTED
         and first_artist(s.artist).lower() == lead
-    )
-    if not counts:
-        return None
-    order = list(MoodGroup)
-    return max(counts, key=lambda g: (counts[g], -order.index(g)))
+    ))
+
+
+def suggest_groups(songs: list[Song]) -> dict[str, MoodGroup | None]:
+    """suggest_group() for every Unsorted song in one pass over `songs` (all songs)."""
+    by_artist: dict[str, Counter] = {}
+    for s in songs:
+        if s.group != MoodGroup.UNSORTED:
+            by_artist.setdefault(first_artist(s.artist).lower(), Counter())[s.group] += 1
+    # An Unsorted song is never in its own counts, so excluding it is automatic.
+    return {s.uri: _best(by_artist.get(first_artist(s.artist).lower(), Counter()))
+            for s in songs if s.group == MoodGroup.UNSORTED}

@@ -125,8 +125,6 @@ class TokenServer:
                 self.valid.add(f"r{self.n}")
                 body = {"access_token": f"a{self.n}", "refresh_token": f"r{self.n}",
                         "scope": auth.SCOPES, "expires_in": 3600, "token_type": "Bearer"}
-        server = self
-
         class Resp:
             status_code = 200 if ok else 400
 
@@ -136,7 +134,6 @@ class TokenServer:
             def raise_for_status(self):
                 if not ok:
                     raise requests.HTTPError(response=self)
-        del server
         return Resp()
 
 

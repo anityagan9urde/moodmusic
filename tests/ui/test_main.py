@@ -199,3 +199,81 @@ def test_update_check_silent_when_up_to_date(qtbot):
     start_update_check(got.append, current="0.1.0", repo="a/b", check=lambda c, r: None)
     qtbot.wait(200)
     assert got == []
+
+
+class _Stoppable:
+    def __init__(self, log, name, result=True, running=False):
+        self.log, self.name, self.result, self.running = log, name, result, running
+
+    def stop(self):
+        self.log.append(self.name)
+        return self.result
+
+    def isRunning(self):  # noqa: N802
+        return self.running
+
+    def close(self):
+        self.log.append(self.name + ".close")
+
+    def shutdown(self):
+        self.log.append(self.name)
+
+
+def test_cleanup_is_idempotent_and_runs_on_about_to_quit(qtbot):
+    from PySide6.QtWidgets import QApplication
+
+    from moodmusic.ui.main import make_cleanup
+    log = []
+    cleanup = make_cleanup(_Stoppable(log, "timer"), _Stoppable(log, "worker"),
+                           _Stoppable(log, "scan"), _Stoppable(log, "library"),
+                           login=_Stoppable(log, "login"), live_wait_ms=10)
+    app = QApplication.instance()
+    app.aboutToQuit.connect(cleanup)
+    try:
+        app.aboutToQuit.emit()
+    finally:
+        app.aboutToQuit.disconnect(cleanup)
+    assert log == ["timer", "login", "scan", "worker", "library.close"]
+    assert cleanup() is True and cleanup() is True
+    assert log == ["timer", "login", "scan", "worker", "library.close"]  # ran once
+
+
+def test_cleanup_keeps_library_open_while_scan_runs(qtbot):
+    from moodmusic.ui.main import make_cleanup
+    log = []
+    cleanup = make_cleanup(_Stoppable(log, "timer"), _Stoppable(log, "worker"),
+                           _Stoppable(log, "scan", result=False), _Stoppable(log, "library"),
+                           live_wait_ms=10)
+    assert cleanup() is False and "library.close" not in log
+
+
+def test_cleanup_survives_failing_steps(qtbot):
+    from moodmusic.ui.main import make_cleanup
+    log = []
+
+    class Bad(_Stoppable):
+        def stop(self):
+            raise RuntimeError("x")
+    cleanup = make_cleanup(Bad(log, "timer"), _Stoppable(log, "worker"),
+                           _Stoppable(log, "scan"), _Stoppable(log, "library"), live_wait_ms=10)
+    assert cleanup() is True and "library.close" in log
+
+
+def test_thread_excepthook_logs(caplog):
+    import sys
+    import threading
+
+    from moodmusic.ui.main import install_excepthooks
+    old_sys, old_thr = sys.excepthook, threading.excepthook
+    try:
+        install_excepthooks()
+
+        def boom():
+            raise ValueError("in thread")
+        t = threading.Thread(target=boom, name="tboom")
+        with caplog.at_level("ERROR"):
+            t.start()
+            t.join()
+        assert "Unhandled exception in thread tboom" in caplog.text
+    finally:
+        sys.excepthook, threading.excepthook = old_sys, old_thr

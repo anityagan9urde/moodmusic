@@ -28,3 +28,19 @@ def test_corrupt_lines_skipped_and_persisted(tmp_path):
     with p.open("a") as f:
         f.write("garbage\n{\"actual\": \"nope\"}\n")
     assert CorrectionStore(p).bias()[0] > 0
+
+
+def test_bias_is_cached_and_recomputed_on_record(tmp_path):
+    p = tmp_path / "c.jsonl"
+    cs = CorrectionStore(p)
+    assert cs.bias() == (0.0, 0.0)
+    p.write_text('{"actual": "upbeat", "valence": -0.9, "arousal": -0.9}\n', encoding="utf-8")
+    assert cs.bias() == (0.0, 0.0)  # cached: the file is not re-read every frame
+    cs.record(MoodGroup.MELANCHOLY, MoodGroup.UPBEAT, -0.9, -0.9)
+    assert cs.bias() == (0.2, 0.2)
+
+
+def test_undecodable_file_gives_zero_bias(tmp_path):
+    p = tmp_path / "c.jsonl"
+    p.write_bytes(b"\xff\xfe\x00garbage\x80\x81\n")
+    assert CorrectionStore(p).bias() == (0.0, 0.0)

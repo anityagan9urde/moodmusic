@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import sys
+import threading
 import time
 from collections.abc import Callable
 
@@ -144,6 +146,67 @@ def make_engine_service(client_id: str, make_spotify_fn=None):
     return SpotifyService((make_spotify_fn or make_spotify)(client_id), retry_429=False)
 
 
+def make_cleanup(timer, worker, scan, library, login=None, tray=None,
+                 live_wait_ms: int = 1500) -> Callable[[], bool]:
+    """Idempotent shutdown for app.aboutToQuit (tray Quit, Cmd+Q, Dock Quit, logoff).
+
+    Returns True when every thread stopped. A waiting browser login is cancelled, never
+    waited on for long; the library is closed only once the scan thread has finished.
+    """
+    from moodmusic.ui import async_util
+    state: dict[str, bool | None] = {"clean": None}
+
+    def step(what: str, fn, default=True):
+        try:
+            return fn()
+        except Exception:
+            log.exception("Shutdown step failed: %s", what)
+            return default
+
+    def cleanup() -> bool:
+        if state["clean"] is not None:
+            return bool(state["clean"])
+        state["clean"] = False
+        step("timer", timer.stop)
+        if login is not None:
+            step("login", login.shutdown)
+        scan_done = step("scan", scan.stop, False)
+        step("worker", worker.stop)  # sets the flag and waits up to 2 s: camera released
+        worker_done = step("worker state", lambda: not worker.isRunning(), False)
+        live_done = step("helper threads", lambda: async_util.wait_live(live_wait_ms), False)
+        if scan_done:
+            step("library", library.close)
+        else:
+            log.warning("Scan thread still running; leaving the library open")
+        if tray is not None:
+            step("tray", tray.icon.hide)
+        state["clean"] = bool(scan_done and worker_done and live_done)
+        return bool(state["clean"])
+
+    return cleanup
+
+
+def install_excepthooks(notify: Callable[[str, str], None] | None = None) -> None:
+    """Log uncaught exceptions on the GUI thread (with a tray note) and on other threads."""
+    def excepthook(exc_type, exc, tb) -> None:
+        log.error("Unhandled exception", exc_info=(exc_type, exc, tb))
+        if notify is not None:
+            try:
+                notify("Mood Music", "Something went wrong. See the log for details.")
+            except Exception:
+                pass
+
+    def thread_excepthook(args) -> None:
+        if args.exc_type is SystemExit:
+            return
+        name = args.thread.name if args.thread is not None else "?"
+        log.error("Unhandled exception in thread %s", name,
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    sys.excepthook = excepthook
+    threading.excepthook = thread_excepthook
+
+
 def build_scanner(settings: Settings, library, make_spotify_fn=None):
     """A Scanner built fresh per scan with the *current* Spotify client id.
 
@@ -247,6 +310,7 @@ def run() -> int:
     from moodmusic.mood.smoother import MoodSmoother
     from moodmusic.music.library import SongLibrary
     from moodmusic.music.selector import SongSelector
+    from moodmusic.ui.common import CAMERA_MESSAGES
     from moodmusic.ui.login import LoginController
     from moodmusic.vision.camera import CameraSource
     from moodmusic.vision.emotion import HSEmotionModel
@@ -269,17 +333,6 @@ def run() -> int:
     views = ViewManager(settings, widget, dashboard)
     bridge = EngineBridge(engine, worker)
     timer = QTimer()
-
-    def quit_app() -> None:
-        timer.stop()
-        scan_done = scan.stop()
-        worker.stop()  # sets the flag and waits up to 2 s, so the camera is released
-        if scan_done:
-            library.close()
-        else:
-            log.warning("Scan thread still running; leaving the library open")
-        tray.icon.hide()
-        app.quit()
 
     def rebuild_service() -> None:
         """After login, logout or a Client ID change: a fresh client for the engine."""
@@ -306,7 +359,9 @@ def run() -> int:
         lambda: build_scanner(settings, library),
         lambda: settings.source_playlist_id)
     scan.finished_with.connect(lambda r: report_scan(r, tray.message))
-    tray = Tray(engine, views, open_settings, quit_app, on_login=login.start)
+    tray = Tray(engine, views, open_settings, app.quit, on_login=login.start)
+    cleanup = make_cleanup(timer, worker, scan, library, login, tray)
+    app.aboutToQuit.connect(cleanup)
     widget.login_requested.connect(login.start)
     dashboard.login_requested.connect(login.start)
     dashboard.settings_requested.connect(open_settings)
@@ -316,16 +371,8 @@ def run() -> int:
     worker.calibration_done.connect(
         lambda _b: tray.message("Mood Music", "Calibration finished. Thanks!"))
     worker.camera_status.connect(
-        lambda s: s != "ok" and tray.message("Mood Music", f"Camera: {s}"))
-
-    def excepthook(exc_type, exc, tb) -> None:
-        log.error("Unhandled exception", exc_info=(exc_type, exc, tb))
-        try:
-            tray.message("Mood Music", "Something went wrong. See the log for details.")
-        except Exception:
-            pass
-
-    sys.excepthook = excepthook
+        lambda s: s in CAMERA_MESSAGES and tray.message("Mood Music", CAMERA_MESSAGES[s][1]))
+    install_excepthooks(lambda title, text: tray.message(title, text))
 
     def tick() -> None:
         engine.tick()
@@ -358,4 +405,10 @@ def run() -> int:
     views.show_view(settings.view)
     app._moodmusic_refs = (bridge, tray, views, updater, login)  # keep alive for the event loop
     code = app.exec()
+    if not cleanup():  # already ran on aboutToQuit; returns its result
+        # A thread is still blocked (e.g. a slow network call). Destroying a running
+        # QThread aborts the process, so leave without running Python finalisers.
+        log.warning("Threads still running at exit; exiting immediately")
+        logging.shutdown()
+        os._exit(code)
     return code

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar, QPushButton, Q
                                QWidget)
 
 from moodmusic.config import Settings, save_settings
-from moodmusic.ui.common import (BUTTON_CSS, ArtLabel, DeviceButton,
+from moodmusic.ui.common import (BUTTON_CSS, CAMERA_MESSAGES, ArtLabel, DeviceButton,
                                  LoginButton, ModeToggle, StatusDot)
 from moodmusic.ui.mood_picker import MoodPicker
 
@@ -171,7 +171,7 @@ class Dashboard(QWidget):
     def _on_camera_status(self, status: str) -> None:
         if status != "ok":
             self.preview_label.clear()
-            self.preview_label.setText(f"Camera: {status}")
+            self.preview_label.setText(CAMERA_MESSAGES.get(status, ("", f"Camera: {status}"))[1])
 
     def refresh(self) -> None:
         status = self._engine.status

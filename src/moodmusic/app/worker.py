@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 MAX_CONSECUTIVE_ERRORS = 20
 ERROR_BACKOFF_S = 2.0
+SETUP_RETRY_S = 10.0  # retry camera/model setup this often after it failed
 LANDMARK_STRIDE = 12
 
 
@@ -103,24 +104,40 @@ class VisionWorker(QThread):
 
     # ---- thread body ----------------------------------------------------
     def run(self) -> None:
-        camera = tracker = model = None
+        parts: list = [None, None, None]  # camera, tracker, model
         try:
-            try:
-                camera = self._camera_factory()
-                tracker = self._tracker_factory()
-                model = self._model_factory()
-            except Exception:
-                log.exception("Vision setup failed")
-                self.camera_status.emit("unavailable")
-                return
-            self._loop(camera, tracker, model)
+            if self._setup(parts):
+                self._loop(*parts)
         finally:
+            camera, tracker = parts[0], parts[1]
             for closer in (getattr(camera, "release", None), getattr(tracker, "close", None)):
                 if closer is not None:
                     try:
                         closer()
                     except Exception:
                         log.exception("Cleanup failed")
+
+    def _setup(self, parts: list) -> bool:
+        """Create camera, tracker and model, retrying failures every SETUP_RETRY_S.
+
+        Status "unavailable" if the camera failed, "model_failed" if tracker/model failed.
+        Returns False if stopped first.
+        """
+        factories = (self._camera_factory, self._tracker_factory, self._model_factory)
+        while not self._stop_flag.is_set():
+            try:
+                for i, factory in enumerate(factories):
+                    if parts[i] is None:
+                        parts[i] = factory()
+                return True
+            except Exception:
+                log.exception("Vision setup failed; retrying in %.0f s", SETUP_RETRY_S)
+                status = "unavailable" if parts[0] is None else "model_failed"
+                if status != self._last_status:
+                    self._last_status = status
+                    self.camera_status.emit(status)
+                self._backoff(SETUP_RETRY_S)
+        return False
 
     def _loop(self, camera, tracker, model) -> None:
         interval = 1.0 / self._fps
@@ -142,9 +159,9 @@ class VisionWorker(QThread):
             if remaining > 0:
                 self._sleep(remaining)
 
-    def _backoff(self) -> None:
+    def _backoff(self, seconds: float = ERROR_BACKOFF_S) -> None:
         waited = 0.0
-        while waited < ERROR_BACKOFF_S and not self._stop_flag.is_set():
+        while waited < seconds and not self._stop_flag.is_set():
             self._sleep(0.1)
             waited += 0.1
 

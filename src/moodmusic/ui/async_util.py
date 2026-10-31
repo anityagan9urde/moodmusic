@@ -1,6 +1,7 @@
 """Run a blocking call off the GUI thread without tying the thread to a widget's lifetime."""
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -55,6 +56,16 @@ class AsyncRunner(QObject):
         if self._closed or gen != self._gen or self._cb is None:
             return
         self._cb(result, err)
+
+
+def wait_live(timeout_ms: int) -> bool:
+    """Wait up to timeout_ms in total for running helper threads; True if none are left."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    for thread in list(_LIVE):
+        remaining = int(max(0.0, deadline - time.monotonic()) * 1000)
+        if not thread.wait(remaining) and thread.isRunning():
+            return False
+    return all(not t.isRunning() for t in list(_LIVE))
 
 
 def load_playlists(client_id: str) -> list:
