@@ -36,6 +36,17 @@ _EMOJI = {
 }
 
 
+# Target (valence, arousal) centre of each group; shared by smoother and corrections.
+GROUP_CENTRES: dict[MoodGroup, tuple[float, float]] = {
+    MoodGroup.UPBEAT: (0.5, 0.5),
+    MoodGroup.CHILL: (0.5, -0.5),
+    MoodGroup.MELANCHOLY: (-0.5, -0.5),
+    MoodGroup.INTENSE: (-0.5, 0.5),
+    MoodGroup.FOCUS: (0.0, 0.0),
+    MoodGroup.UNSORTED: (0.0, 0.0),
+}
+
+
 class Mode(str, Enum):
     MATCH = "match"
     LIFT = "lift"
