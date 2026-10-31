@@ -131,8 +131,10 @@ class Engine:
         """
         if self._rate_limit.blocked():
             return _FAIL
+        name = getattr(fn, "__name__", "call")
+        before = self._err
         try:
-            result = fn(*args)
+            result = self._logged_call(name, fn, args)
         except RateLimited as exc:
             self._rate_limit.hit(exc.retry_after)
             self._err = EngineStatus("warning", SLOW_DOWN)
@@ -150,8 +152,32 @@ class Engine:
             sticky = self._err is not None and self._err.message in (NO_DEVICE, CHOOSE_DEVICE)
             if not (result is None and fn == self.service.playback and sticky):
                 self._err = None
+            self._log_status_change(before)
             return result
+        self._log_status_change(before)
         return _FAIL
+
+    def _logged_call(self, name: str, fn, args):
+        """Diagnostics: every Spotify command, and playback only when it changes."""
+        try:
+            result = fn(*args)
+        except SpotifyError as exc:
+            log.info("spotify %s%s -> %s: %s", name, args, type(exc).__name__, exc)
+            raise
+        if name == "playback":
+            summary = None if result is None else (
+                result.uri, result.device_id, result.is_playing)
+            if summary != getattr(self, "_last_pb_summary", "unset"):
+                self._last_pb_summary = summary
+                log.info("spotify playback now: %s", summary)
+        else:
+            log.info("spotify %s%s -> ok%s", name, args,
+                     f" {result}" if name == "devices" else "")
+        return result
+
+    def _log_status_change(self, before: EngineStatus | None) -> None:
+        if self._err != before:
+            log.info("engine status: %s", self._err or "ok")
 
     # ---- inputs -------------------------------------------------------
     def on_mood(self, state: MoodState) -> None:
@@ -272,6 +298,8 @@ class Engine:
                 if self._can_act():
                     self._play_next()
             elif pb.is_playing:
+                log.info("engine: user is playing %s on device %s - backing off", pb.uri,
+                         pb.device_id)
                 self._manual_uri, self.current_pick, self._queued = pb.uri, None, None
         elif not pb.is_playing:
             reset = near_end and seen[0] == pb.uri and pb.progress_ms < seen[1]
@@ -303,6 +331,8 @@ class Engine:
 
     def _play_next(self) -> bool:
         pick = self._choose()
+        log.info("engine: play next -> %s (target %s, device %s)",
+                 pick.song.uri if pick else None, self._target, self._device_id)
         if pick is None or not self._start(pick.song.uri):
             return False
         self._user_pause.resumed()
