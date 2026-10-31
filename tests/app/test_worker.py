@@ -453,3 +453,48 @@ def test_setup_retry_stops_promptly(qtbot, tmp_path):
     t0 = time.monotonic()
     w.stop()
     assert time.monotonic() - t0 < 2.0 and not w.isRunning()
+
+
+def test_calibration_records_screen_center(qtbot, tmp_path):
+    b = PersonalBaselines()
+    w, *_ = make(tmp_path, calibration_seconds=0.5, baselines=b)
+    try:
+        w.start_calibration()
+        with qtbot.waitSignal(w.calibration_done, timeout=5000):
+            w.start()
+    finally:
+        w.stop()
+    assert b.screen_center is not None
+    assert w._features._center == pytest.approx(b.screen_center)
+
+
+def test_stored_screen_center_applied_at_start(qtbot, tmp_path):
+    b = PersonalBaselines()
+    b.screen_center = (0.2, -0.3, 5.0)
+    w, *_ = make(tmp_path, baselines=b)
+    try:
+        with qtbot.waitSignal(w.mood, timeout=3000):
+            w.start()
+    finally:
+        w.stop()
+    assert w._features._center == (0.2, -0.3, 5.0)
+
+
+def test_baselines_not_sampled_during_other_states(qtbot, tmp_path):
+    class Spy(PersonalBaselines):
+        def __init__(self):
+            super().__init__()
+            self.samples = []
+
+        def update(self, f, dt, sample=True):
+            self.samples.append(sample)
+            super().update(f, dt, sample)
+    spy_state = SpyStateTracker()  # reports HAPPY
+    b = Spy()
+    w, *_ = make(tmp_path, baselines=b, state_tracker=spy_state)
+    try:
+        w.start()
+        qtbot.waitUntil(lambda: len(b.samples) >= 2, timeout=3000)
+    finally:
+        w.stop()
+    assert not any(b.samples)

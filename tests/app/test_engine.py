@@ -731,3 +731,16 @@ def test_not_how_i_feel_forwards_face_state(tmp_path):
     eng, _, _ = make(tmp_path, force=got.append)
     eng.not_how_i_feel(FaceState.LOVE)
     assert got == [FaceState.LOVE]
+
+
+def test_play_history_uses_wall_clock(tmp_path):
+    lib = SongLibrary(tmp_path / "w.db")
+    for s in SONGS:
+        lib.upsert(s)
+    svc = FakeService()
+    eng = Engine(svc, SongSelector(lib, random.Random(1)), Settings(), Clock(),
+                 random.Random(2), hour_fn=lambda: 14, wall_clock=lambda: 1_790_000_000.0)
+    eng.on_mood(mood(FaceState.HAPPY))
+    eng.tick()
+    uri = svc.names("play")[-1][0]
+    assert lib.last_played()[uri] == 1_790_000_000.0  # survives reboots (not monotonic)

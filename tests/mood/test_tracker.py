@@ -27,11 +27,11 @@ def test_none_decision_holds_state():
     tr = StateTracker(10)
     tr.update((F.HAPPY, "smiling"), FEAT, 0.0)
     tr.update((F.HAPPY, "smiling"), FEAT, 10.0)  # promoted
-    tr.update((F.TIRED, "slow blinks"), FEAT, 11.0)  # new candidate
+    tr.update((F.LOVE, "soft smile"), FEAT, 11.0)  # new candidate
     m = tr.update((None, ""), FEAT, 15.0)  # nothing clear: keep state and candidate timer
-    assert m.state == F.HAPPY and m.candidate == F.TIRED
-    m = tr.update((F.TIRED, "slow blinks"), FEAT, 21.0)
-    assert m.state == F.TIRED  # timer from 11.0 kept running
+    assert m.state == F.HAPPY and m.candidate == F.LOVE
+    m = tr.update((F.LOVE, "soft smile"), FEAT, 21.0)
+    assert m.state == F.LOVE  # timer from 11.0 kept running
 
 
 def test_same_state_refreshes_reason():
@@ -62,3 +62,24 @@ def test_set_hold():
     tr.set_hold(2)
     tr.update((F.HAPPY, "x"), FEAT, 0.0)
     assert tr.update((F.HAPPY, "x"), FEAT, 2.0).state == F.HAPPY
+
+
+def test_slow_state_needs_sustained_candidacy():
+    tr = StateTracker(10)
+    tr.update((F.FOCUSED, "x"), FEAT, 0.0)
+    for i in range(1, 400):  # Tired decided continuously for 199.5 s
+        m = tr.update((F.TIRED, "slow blinks"), FEAT, i * 0.5)
+    assert m.state == F.FOCUSED and m.candidate == F.TIRED
+    m = tr.update((F.TIRED, "slow blinks"), FEAT, 250.5)  # 240 s window + 10 s hold
+    assert m.state == F.TIRED
+
+
+def test_fast_state_uses_plain_hold():
+    tr = StateTracker(10)
+    tr.update((F.FOCUSED, "x"), FEAT, 0.0)
+    tr.update((F.HAPPY, "x"), FEAT, 1.0)
+    assert tr.update((F.HAPPY, "x"), FEAT, 11.0).state == F.HAPPY
+
+
+def test_force_slow_state_is_immediate():
+    assert StateTracker(10).force(F.TIRED, 1.0).state == F.TIRED

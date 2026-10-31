@@ -56,6 +56,12 @@ def _mouth_quiet(f: Features) -> float:
     return 1 - ramp(f.mouth_motion_10s, 0.01, 0.05)
 
 
+def _focus_like(f: Features, b: PersonalBaselines) -> float:
+    """Eyes on the screen with a steady head: working, whatever the face is doing."""
+    hm = b.get("head_motion_30s")
+    return ramp(f.gaze_on_ratio_30s, 0.6, 0.85) * (1 - ramp(f.head_motion_30s, hm, hm * 2 + 2))
+
+
 def _focused(f: Features, b: PersonalBaselines) -> Score:
     c = _Cues()
     gate = c.add(ramp(f.gaze_on_ratio_30s, 0.6, 0.85), "eyes on the screen")
@@ -81,17 +87,21 @@ def _deep_thought(f: Features, b: PersonalBaselines) -> Score:
 
 def _love(f: Features, b: PersonalBaselines) -> Score:
     c = _Cues()
-    soft = ramp(f.smile_10s, 0.1, 0.2) * (1 - ramp(f.smile_10s, 0.5, 0.65))
+    bs = b.get("smile_10s")
+    soft = ramp(f.smile_10s, bs + 0.05, bs + 0.15) * (1 - ramp(f.smile_10s, bs + 0.45, bs + 0.6))
     c.add(soft, "soft smile")
     c.add(ramp(f.glance_away_count_30s, 0, 2), "shy glances away")
-    c.add(ramp(f.head_tilt_10s, 3, 8), "head tilted")
+    bt = b.get("head_tilt_10s")
+    c.add(ramp(f.head_tilt_10s, bt + 1, bt + 6), "head tilted")
     c.add(ramp(f.valence_30s, 0.0, 0.3), "warm expression")
-    return c.score(soft)
+    quiet = c.add(_mouth_quiet(f), "quiet")  # glancing away while talking is just a call
+    return c.score(soft * quiet)
 
 
 def _happy(f: Features, b: PersonalBaselines) -> Score:
     c = _Cues()
-    smile = c.add(ramp(f.smile_10s, 0.3, 0.5), "smiling")
+    bs = b.get("smile_10s")
+    smile = c.add(ramp(f.smile_10s, bs + 0.25, bs + 0.45), "smiling")
     c.add(ramp(f.cheek_squint_10s, 0.15, 0.3), "eyes smiling too")
     c.add(ramp(f.valence_30s, 0.1, 0.3), "positive")
     return c.score(smile)
@@ -99,7 +109,9 @@ def _happy(f: Features, b: PersonalBaselines) -> Score:
 
 def _excited(f: Features, b: PersonalBaselines) -> Score:
     c = _Cues()
-    big = max(ramp(f.smile_10s, 0.55, 0.75), ramp(f.brow_inner_up_10s, 0.2, 0.4))
+    bs, bi = b.get("smile_10s"), b.get("brow_inner_up_10s")
+    big = max(ramp(f.smile_10s, bs + 0.5, bs + 0.7),
+              ramp(f.brow_inner_up_10s, bi + 0.15, bi + 0.35))
     c.add(big, "big smile / raised brows")
     c.add(ramp(f.arousal_30s, 0.2, 0.4), "high energy")
     hm = b.get("head_motion_30s")
@@ -125,7 +137,10 @@ def _sleepy(f: Features, b: PersonalBaselines, k: float) -> Score:
     yawns = c.add(ramp(f.yawns_240s, 0, k), "yawning")
     closed_ratio = f.perclos_60s / max(b.get("perclos_60s"), 1e-6)
     c.add(ramp(closed_ratio, 2 * k, 4 * k), "heavy eyelids")
-    return c.score(max(closures, yawns))
+    nodding = c.add(ramp(b.get("head_droop_deg_240s") - f.head_droop_deg_240s, 3 * k, 8 * k),
+                    "head nodding")
+    # Eyelids alone can be glare or reading: they need a yawn or a nodding head too.
+    return c.score(max(yawns, closures * max(yawns, nodding)))
 
 
 def _stressed(f: Features, b: PersonalBaselines, k: float) -> Score:
@@ -134,10 +149,14 @@ def _stressed(f: Features, b: PersonalBaselines, k: float) -> Score:
                  "tense brow")
     press = c.add(ramp(f.mouth_press_30s - b.get("mouth_press_30s"), 0.05 * k, 0.15 * k),
                   "pressed lips")
-    worried = c.add(ramp(f.brow_inner_up_10s, 0.2 * k, 0.4 * k), "worried brow")
+    bi = b.get("brow_inner_up_10s")
+    worried = c.add(ramp(f.brow_inner_up_10s, bi + 0.15 * k, bi + 0.35 * k), "worried brow")
     hm = b.get("head_motion_30s")
     restless = ramp(f.head_motion_30s / max(hm, 1e-6), 1.5 * k, 2.5 * k)
-    unsettled = c.add(max(restless, ramp(-f.valence_30s, 0.2, 0.4)), "restless / uneasy")
+    # A concentration frown reads as mild "anger" to the emotion model, so while the user is
+    # clearly working (eyes on screen, head steady) only real restlessness counts.
+    uneasy = ramp(-f.valence_30s, 0.2, 0.4) * (1 - _focus_like(f, b))
+    unsettled = c.add(max(restless, uneasy), "restless / uneasy")
     tension = sum(x >= REASON_MIN for x in (brow, press, worried))
     gate = 1.0 if tension >= 2 and unsettled >= REASON_MIN else 0.0
     return c.score(gate)

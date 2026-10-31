@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import logging
 import random
+import time
 from datetime import datetime
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -62,7 +63,8 @@ class Engine:
     def __init__(self, service: SpotifyService, selector: SongSelector, settings: Settings,
                  clock: Callable[[], float], rng: random.Random,
                  force_mood: Callable[[FaceState], None] | None = None,
-                 hour_fn: Callable[[], int] | None = None) -> None:
+                 hour_fn: Callable[[], int] | None = None,
+                 wall_clock: Callable[[], float] = time.time) -> None:
         self.service = service
         self.selector = selector
         self.settings = settings
@@ -70,6 +72,7 @@ class Engine:
         self._rng = rng
         self._force_mood = force_mood
         self._hour = hour_fn or (lambda: datetime.now().hour)
+        self._wall_clock = wall_clock  # persisted play history: must survive reboots
         self.listeners: list[Callable[[], None]] = []
         self.history: list[tuple[float, float, float]] = []
         self.current_pick: Pick | None = None
@@ -299,7 +302,7 @@ class Engine:
                 self.current_pick, self._manual_uri = pick, None
                 if self._queued is pick:
                     self._queued = None
-                self.selector.mark_played(pb.uri, self._clock())
+                self.selector.mark_played(pb.uri, self._wall_clock())
             elif self.current_pick is not None and pb.uri == self.current_pick.song.uri:
                 pass
             elif prev is not None and ours_prev and near_end and seen[0] == prev:
@@ -338,7 +341,7 @@ class Engine:
         return intent
 
     def _pick_for(self, mood: FaceMood, intent: Intent) -> Pick | None:
-        pick = self.selector.pick(intent.groups, mood, fresh=intent.fresh, now=self._clock())
+        pick = self.selector.pick(intent.groups, mood, fresh=intent.fresh, now=self._wall_clock())
         if pick is not None and intent.note:
             pick.reason += " — " + intent.note
         return pick
@@ -368,7 +371,7 @@ class Engine:
         self.current_pick, self._queued, self._manual_uri = pick, None, None
         self._seen = None
         self._handled_state = self._mood.state if self._mood else None
-        self.selector.mark_played(pick.song.uri, self._clock())
+        self.selector.mark_played(pick.song.uri, self._wall_clock())
         return True
 
     def _start(self, uri: str) -> bool:

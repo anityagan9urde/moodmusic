@@ -21,6 +21,7 @@ from moodmusic.mood.baselines import PersonalBaselines, save_baselines
 from moodmusic.mood.calibration import Baseline, Calibrator, apply_baseline, save_baseline
 from moodmusic.mood.features import FeatureTracker
 from moodmusic.mood.rules import decide, score_states
+from moodmusic.mood.states import FaceState
 from moodmusic.vision.face import crop_face
 from moodmusic.vision.signals import extract_signals
 from moodmusic.vision.quality import assess_quality
@@ -78,6 +79,8 @@ class VisionWorker(QThread):
         self._baselines = baselines
         self._baselines_path = baselines_path
         self._features = FeatureTracker()
+        if baselines.screen_center is not None:
+            self._features.set_screen_center(*baselines.screen_center)
         self._prev_sig = None
         self._next_state_t: float | None = None
         self._last_state_t: float | None = None
@@ -250,7 +253,9 @@ class VisionWorker(QThread):
             return
         self._next_state_t = t + STATE_EVERY_S
         f = self._features.features(t)
-        self._baselines.update(f, t - self._last_state_t)
+        normal = (self._state_tracker.state.state == FaceState.FOCUSED
+                  and self._calibrator is None)
+        self._baselines.update(f, t - self._last_state_t, sample=normal)
         self._last_state_t = t
         if self._calibrator is None:
             scores = score_states(f, self._baselines, self._corrections.bias())
@@ -286,6 +291,9 @@ class VisionWorker(QThread):
         except Exception:
             log.exception("Saving baseline failed")
         self._baselines.calibrate_rest(self._features.features(t))
+        center = self._features.gaze_center(t, self._calibration_seconds)
+        self._baselines.screen_center = center
+        self._features.set_screen_center(*center)
         self._save_baselines()
         self.baseline = b
         self.calibration_done.emit(b)

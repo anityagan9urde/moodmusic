@@ -84,4 +84,35 @@ def test_persist_roundtrip_and_corrupt_file(tmp_path):
 
 
 def test_sampling_interval_constant():
-    assert SAMPLE_EVERY_S == 5
+    assert SAMPLE_EVERY_S == 15
+
+
+def test_not_sampled_while_another_state_is_active():
+    b = PersonalBaselines()
+    f = Features(face_ratio_10s=1.0, blink_rate_per_min_60s=40)
+    for _ in range(3600):  # 30 min of a detected state (e.g. Tired)
+        b.update(f, 0.5, sample=False)
+    assert b.get("blink_rate_per_min_60s") == DEFAULTS["blink_rate_per_min_60s"]
+    assert b.observed_s == pytest.approx(1800)  # time still counts toward warm-up
+
+
+def test_long_window_resists_an_hour_long_state():
+    b = PersonalBaselines()
+    run(b, 180, head_motion_30s=2.0)  # 3 h of normal work
+    run(b, 60, head_motion_30s=9.0)  # then an hour of something else
+    assert b.get("head_motion_30s") == pytest.approx(2.0)
+
+
+def test_brow_raise_and_tilt_have_baselines():
+    b = PersonalBaselines()
+    b.calibrate_rest(Features(brow_inner_up_10s=0.3, head_tilt_10s=7))
+    assert b.get("brow_inner_up_10s") == pytest.approx(0.3)
+    assert b.get("head_tilt_10s") == pytest.approx(7)
+
+
+def test_screen_center_roundtrip(tmp_path):
+    b = PersonalBaselines()
+    assert b.screen_center is None
+    b.screen_center = (0.1, -0.35, 3.0)
+    save_baselines(b, tmp_path / "c.json")
+    assert load_baselines(tmp_path / "c.json").screen_center == pytest.approx((0.1, -0.35, 3.0))

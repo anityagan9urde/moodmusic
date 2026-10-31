@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 
 from moodmusic.mood.features import Features
-from moodmusic.mood.states import FaceState
+from moodmusic.mood.states import EVIDENCE_WINDOW_S, FaceState
 
 FORCED_REASON = "you said so"
 
@@ -45,7 +45,8 @@ class StateTracker:
             return self._state
         if seen != s.candidate:
             self._candidate_start = t
-        if t - self._candidate_start >= self._hold:
+        needed = self._hold + EVIDENCE_WINDOW_S.get(seen, 0)  # slow states: sustained
+        if t - self._candidate_start >= needed:
             self._state = replace(s, state=seen, since=t, reason=reason, candidate=None)
         else:
             self._state = replace(s, candidate=seen)

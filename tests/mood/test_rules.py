@@ -144,3 +144,45 @@ def test_decide_needs_margin_and_threshold():
     assert decide(s, None) == (F.HAPPY, "smiling")
     s[F.HAPPY] = Score(0.55, ["smiling"])
     assert decide(s, F.HAPPY) == (None, "")
+
+
+def test_focused_frown_with_pressed_lips_and_anger_reads_focused():
+    # HSEmotion reads a concentration frown as some anger -> negative valence.
+    f = replace(AT_DESK, gaze_on_ratio_30s=0.9, brow_down_30s=0.5, mouth_press_30s=0.3,
+                emotion_30s={"anger": 0.5, "neutral": 0.4}, valence_30s=-0.4, stillness_s=12)
+    assert state_of(f)[0] == F.FOCUSED
+    assert score_states(f, WARM)[F.STRESSED].value < 0.6
+
+
+def test_stressed_still_detected_when_restless_while_tense():
+    f = replace(AT_DESK, gaze_on_ratio_30s=0.9, brow_down_30s=0.4, mouth_press_30s=0.35,
+                head_motion_30s=12, valence_30s=-0.4)
+    assert state_of(f)[0] == F.STRESSED
+
+
+def test_call_with_glances_is_not_love():
+    f = replace(AT_DESK, gaze_on_ratio_30s=0.8, mouth_motion_10s=0.08, smile_10s=0.3,
+                head_motion_30s=5, stillness_s=0, arousal_30s=0.1, valence_30s=0.15,
+                glance_away_count_30s=2, head_tilt_10s=4)
+    assert state_of(f)[0] in (F.FOCUSED, F.HAPPY, None)
+    assert score_states(f, WARM)[F.LOVE].value < 0.6
+
+
+def test_smile_thresholds_follow_the_users_resting_face():
+    smiley = WarmBaselines()
+    smiley.calibrate_rest(Features(smile_10s=0.25, gaze_on_ratio_30s=0.85,
+                                   brow_down_30s=0.15, mouth_press_30s=0.1,
+                                   head_droop_deg_240s=-5, brow_inner_up_10s=0.25,
+                                   head_tilt_10s=6))
+    resting = replace(AT_DESK, smile_10s=0.3, glance_away_count_30s=2, head_tilt_10s=7,
+                      valence_30s=0.2, brow_inner_up_10s=0.25)
+    assert state_of(resting, smiley)[0] != F.LOVE  # that's just this person's resting face
+    assert state_of(resting, WARM)[0] == F.LOVE  # for a typical face it's a soft smile
+    assert score_states(resting, smiley)[F.STRESSED].value == 0.0
+
+
+def test_heavy_eyelids_alone_are_not_sleepy():
+    f = replace(AT_DESK, long_closures_90s=3, perclos_60s=0.3, yawns_240s=0)
+    assert state_of(f)[0] != F.SLEEPY
+    nodding = replace(f, head_droop_deg_240s=-15)
+    assert state_of(nodding)[0] == F.SLEEPY
