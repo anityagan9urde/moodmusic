@@ -15,6 +15,7 @@ class FakeEngine:
         self.current_pick = None
         self.listeners = []
         self.history = []
+        self.is_playing = False
         self.devices = []
         self.calls = []
 
@@ -57,10 +58,13 @@ class FakeWorker(QObject):
     calibration_progress = Signal(float)
     calibration_done = Signal(object)
     features_ready = Signal(object)
+    scores_ready = Signal(object)
 
     def __init__(self):
         super().__init__()
         self.calls = []
+
+    baseline = None
 
     def set_preview(self, enabled):
         self.calls.append(("set_preview", enabled))

@@ -1,26 +1,63 @@
-"""Full dashboard window (mockup B)."""
+"""Advanced view: the song and your state first; settings at a glance; testing details folded."""
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
-from moodmusic.config import Settings, save_settings
+from moodmusic.config import HOLD_SECONDS, Settings, save_settings
+from moodmusic.mood.groups import MoodGroup
 from moodmusic.ui.common import (BUTTON_CSS, CAMERA_MESSAGES, ArtLabel, DeviceButton,
                                  LoginButton, ModeToggle, StatusDot)
 from moodmusic.ui.mood_picker import MoodPicker
-from moodmusic.ui.state_panels import SignalsPanel, StateTimeline
+from moodmusic.ui.state_panels import (EMOTION_NAMES, EmotionDeltas, SignalsPanel, StateBars,
+                                       StateTimeline)
 
-EMOTIONS = ("anger", "contempt", "disgust", "fear", "happiness", "neutral", "sadness", "surprise")
-BAR_COLORS = {"happiness": "#f7c948", "neutral": "#888888", "sadness": "#4a7bd0",
-              "fear": "#9b6bd0", "anger": "#e5484d", "disgust": "#6a994e",
-              "contempt": "#c77d4a", "surprise": "#4ad0a0"}
+log = logging.getLogger(__name__)
+
+EMOTIONS = EMOTION_NAMES
 WINDOW_SECONDS = 3600
 POSITIVE, ENERGY = QColor("#f7c948"), QColor("#4ad0a0")
+
+CSS = """
+QWidget { background:#1b1d22; color:#e8e8ea; font-size:12px; }
+QFrame#card { background:#24272e; border-radius:8px; }
+QFrame#card QLabel, QFrame#card QWidget { background:transparent; }
+QLabel#muted { color:#9aa0aa; font-size:11px; }
+QLabel#state { font-size:24px; font-weight:600; }
+QLabel#song { font-size:14px; font-weight:600; }
+QPushButton#ctrl { background:#30343c; border-radius:17px; min-width:34px; max-width:34px;
+                   min-height:34px; max-height:34px; font-size:15px; padding:0; }
+QPushButton#play { background:#1db954; color:#000; border-radius:20px; min-width:40px;
+                   max-width:40px; min-height:40px; max-height:40px; font-size:16px; padding:0; }
+QPushButton#chip { background:#2b2f37; border:1px solid #3a3f49; border-radius:11px;
+                   padding:3px 10px; font-size:11px; }
+QPushButton#chip:hover { border-color:#1db954; }
+QPushButton#fold { background:transparent; color:#9aa0aa; text-align:left; padding:2px 0; }
+"""
+
+
+def duration_text(since: float, now: float) -> str:
+    minutes = int(max(0.0, now - since) // 60)
+    return "just now" if minutes < 1 else f"for {minutes} min"
+
+
+def _card() -> tuple[QFrame, QVBoxLayout]:
+    frame = QFrame()
+    frame.setObjectName("card")
+    lay = QVBoxLayout(frame)
+    lay.setContentsMargins(12, 10, 12, 10)
+    return frame, lay
+
+
+def _muted(text: str = "") -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("muted")
+    return label
 
 
 class MoodChart(QWidget):
@@ -29,7 +66,7 @@ class MoodChart(QWidget):
         super().__init__(parent)
         self.history: list[tuple[float, float, float]] = []
         self._clock = clock
-        self.setMinimumSize(240, 110)
+        self.setMinimumSize(240, 90)
 
     def set_history(self, history) -> None:
         self.history = list(history)
@@ -55,6 +92,57 @@ class MoodChart(QWidget):
                 prev = (x, y)
 
 
+class SettingsChips(QWidget):
+    """Current settings at a glance. The song-switch chip toggles; the rest open Settings."""
+
+    def __init__(self, engine, save: Callable[[Settings], None],
+                 open_settings: Callable[[], None], parent=None) -> None:
+        super().__init__(parent)
+        self._engine, self._save = engine, save
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.switch_chip = QPushButton()
+        self.react_chip = QPushButton()
+        self.away_chip = QPushButton()
+        self.source_chip = QPushButton()
+        self.chips = [self.switch_chip, self.react_chip, self.away_chip, self.source_chip]
+        for chip in self.chips:
+            chip.setObjectName("chip")
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            lay.addWidget(chip)
+        lay.addStretch(1)
+        self.switch_chip.setToolTip("Click to change")
+        self.switch_chip.clicked.connect(self._toggle_switch)
+        for chip in self.chips[1:]:
+            chip.setToolTip("Change in Settings")
+            chip.clicked.connect(lambda _=False: open_settings())
+        self.refresh()
+
+    def _toggle_switch(self) -> None:
+        s = self._engine.settings
+        s.switch_mode = "wait" if s.switch_mode == "immediate" else "immediate"
+        try:
+            self._save(s)
+        except Exception:
+            log.exception("Could not save settings")
+        self.refresh()
+
+    def refresh(self) -> None:
+        s = self._engine.settings
+        self.switch_chip.setText("On mood change: "
+                                 + ("switch now" if s.switch_mode == "immediate"
+                                    else "finish song"))
+        hold = HOLD_SECONDS.get(s.sensitivity, HOLD_SECONDS["normal"])
+        self.react_chip.setText(f"Reacts after: {hold} s")
+        self.away_chip.setText("Away pause: "
+                               + (f"{s.away_pause_minutes} min" if s.away_pause_minutes
+                                  else "off"))
+        self.source_chip.setText("Plays from: "
+                                 + ("Liked Songs" if s.source_playlist_id is None
+                                    else "a playlist"))
+
+
 class Dashboard(QWidget):
     switch_view = Signal(str)
     settings_requested = Signal()
@@ -65,75 +153,113 @@ class Dashboard(QWidget):
                  save: Callable[[Settings], None] = save_settings, baselines=None) -> None:
         super().__init__()
         self._engine, self._worker, self._clock = engine, worker, clock
+        self._mood = None
         self.setWindowTitle("Mood Music")
-        self.resize(720, 420)
-        self.setStyleSheet("QWidget { background:#16161b; color:#eee; }" + BUTTON_CSS
-                           + "QProgressBar { background:#2a2a32; border:none; border-radius:3px;"
-                             " max-height:6px; }")
+        self.resize(760, 640)
+        self.setStyleSheet(CSS + BUTTON_CSS)
 
-        self.preview_label = QLabel("Camera preview")
-        self.preview_label.setFixedSize(320, 240)
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setStyleSheet("background:#333; border-radius:6px; color:#aaa;")
-        self.bars: dict[str, QProgressBar] = {}
-        left = QVBoxLayout()
-        left.addWidget(self.preview_label)
-        for name in EMOTIONS:
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setTextVisible(False)
-            bar.setStyleSheet(f"QProgressBar::chunk {{ background:{BAR_COLORS[name]};"
-                              " border-radius:3px; }")
-            self.bars[name] = bar
-            row = QHBoxLayout()
-            label = QLabel(name.capitalize())
-            label.setFixedWidth(70)
-            row.addWidget(label)
-            row.addWidget(bar, 1)
-            left.addLayout(row)
-        left.addWidget(QLabel("Signals (tick = your normal)"))
-        self.signals = SignalsPanel(baselines)
-        left.addWidget(self.signals)
-        left.addStretch(1)
+        # -- your state ------------------------------------------------------
+        state_card, sl = _card()
+        sl.addWidget(_muted("You seem"))
+        self.state_label = QLabel("…")
+        self.state_label.setObjectName("state")
+        self.state_detail = _muted("Reading your face…")
+        self.state_detail.setWordWrap(True)
+        self.feel_btn = QPushButton("Not how I feel")
+        self.feel_btn.clicked.connect(self._not_how_i_feel)
+        sl.addWidget(self.state_label)
+        sl.addWidget(self.state_detail)
+        sl.addStretch(1)
+        feel_row = QHBoxLayout()
+        feel_row.addWidget(self.feel_btn)
+        feel_row.addStretch(1)
+        sl.addLayout(feel_row)
 
-        self.chart = MoodChart(clock)
-        legend = QLabel('<span style="color:#f7c948">■</span> positive '
-                        '<span style="color:#4ad0a0">■</span> energy')
-        legend.setStyleSheet("font-size:10px; color:#aaa;")
-        self.art = ArtLabel(48)
+        # -- now playing -----------------------------------------------------
+        song_card, pl = _card()
+        self.art = ArtLabel(56)
         self.song_label = QLabel("Nothing playing")
-        self.song_label.setStyleSheet("font-weight:bold;")
-        self.reason_label = QLabel("")
-        self.reason_label.setStyleSheet("color:#999; font-size:11px;")
+        self.song_label.setObjectName("song")
+        self.song_label.setWordWrap(True)
+        self.artist_label = _muted("")
+        self.reason_label = _muted("")
         self.reason_label.setWordWrap(True)
-        playing = QHBoxLayout()
-        playing.addWidget(self.art)
+        top = QHBoxLayout()
+        top.addWidget(self.art, 0, Qt.AlignmentFlag.AlignTop)
         texts = QVBoxLayout()
-        texts.addWidget(self.song_label)
-        texts.addWidget(self.reason_label)
-        playing.addLayout(texts, 1)
+        texts.setSpacing(1)
+        for w in (self.song_label, self.artist_label, self.reason_label):
+            texts.addWidget(w)
+        top.addLayout(texts, 1)
+        pl.addLayout(top)
+        self.prev_btn, self.pause_btn, self.next_btn = (
+            QPushButton("⏮"), QPushButton("▶"), QPushButton("⏭"))
+        controls = QHBoxLayout()
+        for btn, name, slot in ((self.prev_btn, "ctrl", engine.previous),
+                                (self.pause_btn, "play", engine.toggle_pause),
+                                (self.next_btn, "ctrl", engine.skip)):
+            btn.setObjectName(name)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, s=slot: s())
+            controls.addWidget(btn)
+        controls.addStretch(1)
         self.wrong_btn = QPushButton("Wrong vibe")
         self.wrong_btn.clicked.connect(self._wrong_vibe)
-        self.mode_toggle = ModeToggle(engine, save)
         self.device_btn = DeviceButton(engine)
         self.login_btn = LoginButton(engine, self.login_requested.emit)
-        self.mood_label = QLabel("")
-        modes = QHBoxLayout()
-        modes.addWidget(self.mood_label, 1)
-        modes.addWidget(self.mode_toggle)
-        self.timeline = StateTimeline(clock)
-        right = QVBoxLayout()
-        right.addWidget(QLabel("States over the last hour"))
-        right.addWidget(self.timeline)
-        right.addWidget(self.chart)
-        right.addWidget(legend)
-        right.addLayout(playing)
-        right.addWidget(self.wrong_btn)
-        right.addWidget(self.device_btn)
-        right.addWidget(self.login_btn)
-        right.addLayout(modes)
-        right.addStretch(1)
+        for b in (self.device_btn, self.login_btn, self.wrong_btn):
+            controls.addWidget(b)
+        pl.addLayout(controls)
 
+        hero = QHBoxLayout()
+        hero.addWidget(state_card, 4)
+        hero.addWidget(song_card, 5)
+
+        # -- how sure about each state + last hour ---------------------------
+        bars_card, bl = _card()
+        head = QHBoxLayout()
+        head.addWidget(_muted("How sure it is about each state  ·  "
+                              "<span style='color:#f7c948'>│</span> needed to switch"), 1)
+        self.mode_toggle = ModeToggle(engine, save)
+        head.addWidget(self.mode_toggle)
+        bl.addLayout(head)
+        self.state_bars = StateBars()
+        bl.addWidget(self.state_bars)
+        bl.addWidget(_muted("Last hour"))
+        self.timeline = StateTimeline(clock)
+        bl.addWidget(self.timeline)
+
+        self.chips = SettingsChips(engine, save, self.settings_requested.emit)
+
+        # -- testing details (folded) ----------------------------------------
+        self.testing_toggle = QPushButton("▸ Show camera, face signals and emotions (testing)")
+        self.testing_toggle.setObjectName("fold")
+        self.testing_toggle.setCheckable(True)
+        self.testing_toggle.toggled.connect(self._fold)
+        self.testing = QWidget()
+        tl = QHBoxLayout(self.testing)
+        tl.setContentsMargins(0, 0, 0, 0)
+        self.preview_label = QLabel("Camera preview")
+        self.preview_label.setFixedSize(240, 180)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setStyleSheet("background:#333; border-radius:6px; color:#aaa;")
+        tl.addWidget(self.preview_label, 0, Qt.AlignmentFlag.AlignTop)
+        det = QVBoxLayout()
+        det.addWidget(_muted("Emotions compared with your resting face"))
+        self.emotions = EmotionDeltas()
+        self.emotions.set_rest(getattr(getattr(worker, "baseline", None), "probs", None))
+        det.addWidget(self.emotions)
+        det.addWidget(_muted("Face signals  (tick = your normal)"))
+        self.signals = SignalsPanel(baselines)
+        det.addWidget(self.signals)
+        det.addWidget(_muted("<span style='color:#f7c948'>■</span> positive  "
+                             "<span style='color:#4ad0a0'>■</span> energy, last hour"))
+        self.chart = MoodChart(clock)
+        det.addWidget(self.chart)
+        tl.addLayout(det, 1)
+        self.testing.setVisible(False)
+
+        # -- footer ------------------------------------------------------------
         self.dot = StatusDot()
         self.status_label = QLabel("All good")
         self.settings_btn = QPushButton("Settings")
@@ -148,11 +274,15 @@ class Dashboard(QWidget):
         for b in (self.settings_btn, self.review_btn, self.simple_btn):
             bottom.addWidget(b)
 
-        body = QHBoxLayout()
-        body.addLayout(left)
-        body.addLayout(right, 1)
         root = QVBoxLayout(self)
-        root.addLayout(body, 1)
+        root.setContentsMargins(14, 14, 14, 10)
+        root.setSpacing(10)
+        root.addLayout(hero)
+        root.addWidget(bars_card)
+        root.addWidget(self.chips)
+        root.addWidget(self.testing_toggle)
+        root.addWidget(self.testing)
+        root.addStretch(1)
         root.addLayout(bottom)
 
         engine.listeners.append(self.refresh)
@@ -161,11 +291,16 @@ class Dashboard(QWidget):
         worker.mood.connect(self._on_mood)
         worker.camera_status.connect(self._on_camera_status)
         worker.features_ready.connect(self.signals.set_features)
+        worker.scores_ready.connect(self.state_bars.set_scores)
+        worker.calibration_done.connect(self._on_calibrated)
         self.refresh()
 
+    # ---- worker inputs -------------------------------------------------------
     def _on_reading(self, reading) -> None:
-        for name, bar in self.bars.items():
-            bar.setValue(int(round(reading.probs.get(name, 0.0) * 100)))
+        self.emotions.set_probs(reading.probs)
+
+    def _on_calibrated(self, baseline) -> None:
+        self.emotions.set_rest(getattr(baseline, "probs", None))
 
     def _on_preview(self, image) -> None:
         self.preview_label.setPixmap(QPixmap.fromImage(image).scaled(
@@ -173,16 +308,30 @@ class Dashboard(QWidget):
             Qt.TransformationMode.SmoothTransformation))
 
     def _on_mood(self, mood) -> None:
-        state = mood.state
-        self.mood_label.setText(f"{state.emoji} {state.label}")
-        self.mood_label.setToolTip(f"{state.label}: {mood.reason}" if mood.reason else state.label)
-        self.timeline.add(self._clock(), state)
+        self._mood = mood
+        self.state_bars.set_current(mood.state)
+        self.timeline.add(self._clock(), mood.state)
+        self._show_state()
+
+    def _show_state(self) -> None:
+        mood = self._mood
+        if mood is None:
+            return
+        self.state_label.setText(f"{mood.state.emoji} {mood.state.label}")
+        detail = duration_text(mood.since, self._clock())
+        self.state_detail.setText(f"{detail} · {mood.reason}" if mood.reason else detail)
 
     def _on_camera_status(self, status: str) -> None:
         if status != "ok":
             self.preview_label.clear()
             self.preview_label.setText(CAMERA_MESSAGES.get(status, ("", f"Camera: {status}"))[1])
 
+    def _fold(self, shown: bool) -> None:
+        self.testing.setVisible(shown)
+        self.testing_toggle.setText(("▾ Hide" if shown else "▸ Show")
+                                    + " camera, face signals and emotions (testing)")
+
+    # ---- engine state ----------------------------------------------------------
     def refresh(self) -> None:
         status = self._engine.status
         self.dot.set_status(status.kind, status.message)
@@ -190,16 +339,30 @@ class Dashboard(QWidget):
         pick = self._engine.current_pick
         if pick is None:
             self.song_label.setText("Nothing playing")
+            self.artist_label.setText("")
             self.reason_label.setText("")
         else:
-            self.song_label.setText(f"▶ {pick.song.title} · {pick.song.artist}")
-            self.reason_label.setText(f"picked because: {pick.reason}")
+            self.song_label.setText(pick.song.title)
+            group = pick.song.group
+            tag = f" · {group.emoji} {group.value.capitalize()}" if isinstance(
+                group, MoodGroup) else ""
+            self.artist_label.setText(f"{pick.song.artist}{tag}")
+            self.reason_label.setText(f"Picked because {pick.reason}")
         self.art.set_url(pick.song.album_art if pick else None)
         self.wrong_btn.setEnabled(pick is not None)
+        self.pause_btn.setText("⏸" if getattr(self._engine, "is_playing", False) else "▶")
         self.chart.set_history(self._engine.history)
         self.mode_toggle.refresh()
         self.device_btn.refresh()
         self.login_btn.refresh()
+        self.chips.refresh()
+        self._show_state()
+
+    # ---- user actions ----------------------------------------------------------
+    def _not_how_i_feel(self) -> None:
+        state = MoodPicker.ask_state(self, "How do you feel?")
+        if state is not None:
+            self._worker.force_mood(state)
 
     def _wrong_vibe(self) -> None:
         group = MoodPicker.ask_group(self, "This song fits…")

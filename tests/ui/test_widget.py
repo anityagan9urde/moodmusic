@@ -154,3 +154,13 @@ def test_status_dot_shows_camera_problems(qtbot, engine, worker):
     assert w.dot.color == ERR and w.dot.toolTip() == "Mood model failed to load. See the log."
     worker.camera_status.emit("ok")
     assert w.dot.color == OK and w.dot.toolTip() == "All good"
+
+
+def test_pause_button_reflects_playback(qtbot, engine, worker):
+    from moodmusic.ui.widget import MoodWidget
+    w = MoodWidget(engine, worker)
+    qtbot.addWidget(w)
+    assert w.pause_btn.text() == "▶"
+    engine.is_playing = True
+    engine.notify()
+    assert w.pause_btn.text() == "⏸"

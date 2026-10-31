@@ -110,3 +110,103 @@ class StateTimeline(QWidget):
             x1 = int((end - start) / WINDOW_SECONDS * w)
             if x1 > x0:
                 p.fillRect(x0, 0, x1 - x0, h, QColor(STATE_COLORS[state]))
+
+
+DECIDE_LINE = 60  # % a state needs before it can take over (rules.DECIDE_MIN)
+EMOTION_NAMES = ("anger", "contempt", "disgust", "fear", "happiness", "neutral", "sadness",
+                 "surprise")
+REST_BAND = 5  # within this many points of the resting face reads as "≈ rest"
+
+
+class StateBars(QWidget):
+    """One bar per face state: how sure the rules are, with the take-over line marked."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.values: dict[FaceState, int] = {s: 0 for s in FaceState}
+        self.current: FaceState | None = None
+        self.setMinimumHeight(19 * len(self.values))
+
+    def set_scores(self, scores: dict) -> None:
+        self.values = {s: _pct(scores.get(s, 0.0)) for s in FaceState}
+        self.update()
+
+    def set_current(self, state: FaceState) -> None:
+        self.current = state
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        n = len(self.values)
+        row = max(16, self.height() // max(1, n))
+        label_w, value_w = 130, 40
+        bar_w = max(10, self.width() - label_w - value_w - 8)
+        for i, (state, value) in enumerate(self.values.items()):
+            y = i * row
+            on = state == self.current
+            p.setPen(QColor("#ffffff" if on else "#c8c8cc"))
+            p.drawText(0, y, label_w, row, Qt.AlignmentFlag.AlignVCenter,
+                       f"{state.emoji}  {state.label}")
+            top, h = y + row // 2 - 4, 8
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor("#30343c"))
+            p.drawRoundedRect(label_w, top, bar_w, h, 4, 4)
+            if value:
+                p.setBrush(QColor("#1db954" if on else "#5b8def"))
+                p.drawRoundedRect(label_w, top, max(h, bar_w * value // 100), h, 4, 4)
+            mx = label_w + bar_w * DECIDE_LINE // 100
+            p.setPen(QPen(QColor("#f7c948"), 2))
+            p.drawLine(mx, top - 3, mx, top + h + 3)
+            p.setPen(QColor("#9aa0aa"))
+            p.drawText(label_w + bar_w + 4, y, value_w, row,
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, f"{value}%")
+
+
+class EmotionDeltas(QWidget):
+    """Each emotion relative to the user's resting face: centre = rest, right = more."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.rest: dict[str, float] = {}
+        self.deltas: dict[str, int] = {e: 0 for e in EMOTION_NAMES}
+        self.setMinimumHeight(17 * len(EMOTION_NAMES))
+
+    def set_rest(self, probs: dict[str, float] | None) -> None:
+        self.rest = dict(probs or {})
+
+    def set_probs(self, probs: dict[str, float]) -> None:
+        self.deltas = {e: int(round((probs.get(e, 0.0) - self.rest.get(e, 0.0)) * 100))
+                       for e in EMOTION_NAMES}
+        self.update()
+
+    def text_for(self, name: str) -> str:
+        d = self.deltas[name]
+        if abs(d) < REST_BAND:
+            return "≈ rest"
+        return f"+{d}" if d > 0 else f"−{-d}"
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        n = len(EMOTION_NAMES)
+        row = max(14, self.height() // n)
+        label_w, value_w = 80, 48
+        bar_w = max(20, self.width() - label_w - value_w - 8)
+        mid = label_w + bar_w // 2
+        for i, name in enumerate(EMOTION_NAMES):
+            y = i * row
+            p.setPen(QColor("#c8c8cc"))
+            p.drawText(0, y, label_w, row, Qt.AlignmentFlag.AlignVCenter, name.capitalize())
+            top = y + row // 2 - 4
+            p.fillRect(label_w, top, bar_w, 8, QColor("#30343c"))
+            d = max(-100, min(100, self.deltas[name]))
+            w = bar_w // 2 * abs(d) // 100
+            if abs(d) >= REST_BAND:
+                colour = QColor("#1db954" if d > 0 else "#5b8def")
+                p.fillRect(mid if d > 0 else mid - w, top, w, 8, colour)
+            p.setPen(QPen(QColor("#888888"), 1))
+            p.drawLine(mid, top - 2, mid, top + 10)
+            p.setPen(QColor("#9aa0aa"))
+            p.drawText(label_w + bar_w + 4, y, value_w, row,
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                       self.text_for(name))

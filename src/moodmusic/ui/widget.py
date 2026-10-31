@@ -108,6 +108,7 @@ class MoodWidget(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
+        self.pause_btn.setText("⏸" if getattr(self._engine, "is_playing", False) else "▶")
         status = self._engine.status
         bad_quality = self._quality is not None and not self._quality.ok
         if bad_quality:
