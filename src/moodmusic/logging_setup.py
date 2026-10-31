@@ -23,4 +23,21 @@ def setup_logging() -> Path:
             logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
         )
         root.addHandler(handler)
+    _enable_crash_dump()
     return log_path
+
+
+_crash_file = None  # kept open for the life of the process (faulthandler needs the fd)
+
+
+def _enable_crash_dump() -> None:
+    """On a native crash (e.g. inside Qt), write every thread's Python stack to crash.log."""
+    global _crash_file
+    if _crash_file is not None:
+        return
+    import faulthandler
+    try:
+        _crash_file = open(data_dir() / "crash.log", "a", encoding="utf-8")
+        faulthandler.enable(file=_crash_file, all_threads=True)
+    except OSError:
+        logging.getLogger(__name__).warning("Could not enable crash dumps", exc_info=True)
