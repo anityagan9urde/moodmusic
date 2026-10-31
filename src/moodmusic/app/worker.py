@@ -98,7 +98,8 @@ class VisionWorker(QThread):
 
     def stop(self) -> None:
         self._stop_flag.set()
-        self.wait(2000)
+        if not self.wait(2000):
+            log.warning("Vision worker did not stop within 2 s")
 
     # ---- thread body ----------------------------------------------------
     def run(self) -> None:
@@ -225,6 +226,7 @@ class VisionWorker(QThread):
         except ValueError:
             log.warning("Calibration had too few samples; restarting")
             self._calibrator = Calibrator(duration_s=self._calibration_seconds)
+            self.calibration_progress.emit(0.0)
             return
         self._calibrator = None
         try:
