@@ -100,8 +100,5 @@ class SongSelector:
 
 
 def _mood_label(mood) -> str:
-    """Face state label (FaceMood.state) or, until the switch-over, the old MoodState.group."""
-    state = getattr(mood, "state", None)
-    if state is not None:
-        return state.label
-    return mood.group.label
+    """Label of the user's face state (FaceMood.state)."""
+    return mood.state.label

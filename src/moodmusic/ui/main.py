@@ -305,9 +305,10 @@ def run() -> int:
 
     from moodmusic.app.engine import Engine
     from moodmusic.app.worker import VisionWorker
+    from moodmusic.mood.baselines import load_baselines
     from moodmusic.mood.calibration import load_baseline
-    from moodmusic.mood.corrections import CorrectionStore
-    from moodmusic.mood.smoother import MoodSmoother
+    from moodmusic.mood.state_corrections import StateCorrections
+    from moodmusic.mood.tracker import StateTracker
     from moodmusic.music.library import SongLibrary
     from moodmusic.music.selector import SongSelector
     from moodmusic.ui.common import CAMERA_MESSAGES
@@ -319,17 +320,19 @@ def run() -> int:
     service = make_engine_service(settings.spotify_client_id)
     library = SongLibrary(data_dir() / "library.db")
     selector = SongSelector(library, random.Random())
-    corrections = CorrectionStore(data_dir() / "corrections.jsonl")
-    smoother = MoodSmoother(HOLD_SECONDS.get(settings.sensitivity, HOLD_SECONDS["normal"]))
+    corrections = StateCorrections(data_dir() / "state_corrections.jsonl")
+    state_tracker = StateTracker(HOLD_SECONDS.get(settings.sensitivity, HOLD_SECONDS["normal"]))
+    baselines = load_baselines()
     baseline = load_baseline()
     worker = VisionWorker(
         camera_factory=lambda: CameraSource(settings.camera_index), tracker_factory=FaceTracker,
-        model_factory=HSEmotionModel, baseline=baseline, smoother=smoother,
-        corrections=corrections, fps=8)
+        model_factory=HSEmotionModel, baseline=baseline, state_tracker=state_tracker,
+        corrections=corrections, baselines=baselines, fps=8)
     engine = Engine(service, selector, settings, time.monotonic, random.Random(),
                     force_mood=worker.force_mood)
 
-    widget, dashboard = MoodWidget(engine, worker), Dashboard(engine, worker)
+    widget = MoodWidget(engine, worker)
+    dashboard = Dashboard(engine, worker, baselines=baselines)
     views = ViewManager(settings, widget, dashboard)
     bridge = EngineBridge(engine, worker)
     timer = QTimer()

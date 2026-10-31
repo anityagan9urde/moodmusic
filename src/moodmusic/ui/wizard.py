@@ -45,16 +45,18 @@ def _default_validate(key: str) -> None:
 
 def _default_worker(index: int):
     from moodmusic.app.worker import VisionWorker
-    from moodmusic.mood.corrections import CorrectionStore
-    from moodmusic.mood.smoother import MoodSmoother
+    from moodmusic.mood.baselines import load_baselines
+    from moodmusic.mood.state_corrections import StateCorrections
+    from moodmusic.mood.tracker import StateTracker
     from moodmusic.vision.camera import CameraSource
     from moodmusic.vision.emotion import HSEmotionModel
     from moodmusic.vision.face import FaceTracker
     return VisionWorker(
         camera_factory=lambda: CameraSource(index), tracker_factory=FaceTracker,
         model_factory=HSEmotionModel, baseline=None,
-        smoother=MoodSmoother(HOLD_SECONDS["normal"]),
-        corrections=CorrectionStore(data_dir() / "corrections.jsonl"), fps=8)
+        state_tracker=StateTracker(HOLD_SECONDS["normal"]),
+        corrections=StateCorrections(data_dir() / "state_corrections.jsonl"),
+        baselines=load_baselines(), fps=8)
 
 
 class SetupWizard(QWizard):

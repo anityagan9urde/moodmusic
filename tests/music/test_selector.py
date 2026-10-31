@@ -1,7 +1,8 @@
 import random
 
 from moodmusic.mood.groups import MoodGroup
-from moodmusic.mood.smoother import MoodState
+from moodmusic.mood.states import FaceState
+from moodmusic.mood.tracker import FaceMood
 from moodmusic.music.library import Song, SongLibrary
 from moodmusic.music.selector import SongSelector
 
@@ -10,8 +11,8 @@ def mk(uri, group, tags=("a", "b"), source="track"):
     return Song(uri, "T" + uri, "A", None, group, list(tags), source, False)
 
 
-def state(group=MoodGroup.CHILL):
-    return MoodState(group, 0.0, 0.0, 0.0, {}, None)
+def state(face=FaceState.STRESSED):
+    return FaceMood(face)
 
 
 def sel(tmp_path, songs):
@@ -57,8 +58,8 @@ def test_unsorted_never_picked(tmp_path):
 
 def test_reason_text(tmp_path):
     s = sel(tmp_path, [mk("u1", MoodGroup.CHILL, tags=("mellow", "acoustic", "x"))])
-    p = s.pick([MoodGroup.CHILL], state(MoodGroup.CHILL))
-    assert p.reason == "Chill: you seem chill; tagged mellow, acoustic"
+    p = s.pick([MoodGroup.CHILL], state(FaceState.STRESSED))
+    assert p.reason == "Chill: you seem stressed; tagged mellow, acoustic"
     assert p.fell_back_from is None
 
 
@@ -66,8 +67,8 @@ def test_reason_artist_and_user(tmp_path):
     s = sel(tmp_path, [mk("u1", MoodGroup.CHILL, source="artist")])
     assert s.pick([MoodGroup.CHILL], state()).reason.endswith("; sorted by artist style")
     s = sel(tmp_path / "y", [mk("u1", MoodGroup.CHILL, source="user")])
-    assert s.pick([MoodGroup.CHILL], state(MoodGroup.MELANCHOLY)).reason == \
-        "Chill: you seem melancholy; you filed it here"
+    assert s.pick([MoodGroup.CHILL], state(FaceState.SAD)).reason == \
+        "Chill: you seem sad; you filed it here"
 
 
 class FaceMoodStub:

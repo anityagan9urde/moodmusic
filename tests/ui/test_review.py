@@ -75,3 +75,13 @@ def test_review_without_scan_hides_rescan(qtbot, tmp_path):
     d = ReviewDialog(lib(tmp_path))
     qtbot.addWidget(d)
     assert d.rescan_button.isHidden()
+
+
+def test_review_has_nine_lists_in_order(qtbot, tmp_path):
+    from moodmusic.music.library import SongLibrary
+    from moodmusic.ui.review_dialog import ReviewDialog
+    lib = SongLibrary(tmp_path / "r.db")
+    dlg = ReviewDialog(lib)
+    qtbot.addWidget(dlg)
+    assert [g.value for g in dlg.lists] == ["focus", "profound", "romantic", "chill", "upbeat",
+                                            "party", "melancholy", "intense", "unsorted"]

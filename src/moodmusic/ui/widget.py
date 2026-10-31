@@ -114,7 +114,10 @@ class MoodWidget(QWidget):
             self.mood_label.setText(self._quality.issue or "Poor image quality")
             self.steady_label.setText("")
         elif self._mood is not None:
-            self.mood_label.setText(f"{self._mood.group.emoji} {self._mood.group.label}")
+            state = self._mood.state
+            self.mood_label.setText(f"{state.emoji} {state.label}")
+            reason = getattr(self._mood, "reason", "")
+            self.mood_label.setToolTip(f"{state.label}: {reason}" if reason else state.label)
             self.steady_label.setText(steady_text(self._mood.since, self._clock()))
         if self._camera in CAMERA_MESSAGES:
             self.dot.set_status(*CAMERA_MESSAGES[self._camera])
@@ -133,13 +136,13 @@ class MoodWidget(QWidget):
 
     # ---- actions ----------------------------------------------------------
     def _not_how_i_feel(self) -> None:
-        # Routed through the worker (records the correction, resets the smoother).
-        group = MoodPicker.ask(self, "How do you feel?")
-        if group is not None:
-            self._worker.force_mood(group)
+        # Routed through the worker (records the correction, sets the state now).
+        state = MoodPicker.ask_state(self, "How do you feel?")
+        if state is not None:
+            self._worker.force_mood(state)
 
     def _wrong_vibe(self) -> None:
-        group = MoodPicker.ask(self, "This song fits…")
+        group = MoodPicker.ask_group(self, "This song fits…")
         if group is not None:
             self._engine.wrong_vibe(group)
 

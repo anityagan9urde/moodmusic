@@ -55,3 +55,42 @@ def test_chart_uses_history(qtbot, engine, worker):
     assert d.chart.history == engine.history
     d.chart.resize(200, 100)
     assert not d.chart.grab().isNull()
+
+
+def test_dashboard_shows_state_and_reason(qtbot, engine, worker):
+    from moodmusic.mood.states import FaceState
+    from moodmusic.mood.tracker import FaceMood
+    d = make(qtbot, engine, worker)
+    worker.mood.emit(FaceMood(FaceState.LOVE, 5.0, "soft smile, shy glances away"))
+    assert d.mood_label.text() == "🥰 Love / shy"
+    assert d.mood_label.toolTip() == "Love / shy: soft smile, shy glances away"
+
+
+def test_dashboard_signals_panel_updates_from_features(qtbot, engine, worker):
+    from moodmusic.mood.features import Features
+    d = make(qtbot, engine, worker)
+    worker.features_ready.emit(Features(gaze_on_ratio_30s=0.8, blink_rate_per_min_60s=30,
+                                        stillness_s=15, smile_10s=0.5, brow_down_30s=0.4,
+                                        mouth_press_30s=0.2, perclos_60s=0.1))
+    v = d.signals.values
+    assert v["Eyes on screen"] == 80
+    assert v["Blink rate"] == 50  # 30/min on a 0-60 scale
+    assert v["Stillness"] == 50  # 15 s on a 0-30 s scale
+    assert v["Smile"] == 50 and v["Tension"] == 30 and v["Eyes open"] == 90
+    assert set(d.signals.markers) == set(v)  # every signal shows the user's baseline
+
+
+def test_dashboard_timeline_segments_on_state_change(qtbot, engine, worker):
+    from moodmusic.mood.states import FaceState
+    from moodmusic.mood.tracker import FaceMood
+    clock = [100.0]
+    d = Dashboard(engine, worker, clock=lambda: clock[0], save=lambda s: None)
+    qtbot.addWidget(d)
+    worker.mood.emit(FaceMood(FaceState.FOCUSED, 100.0))
+    clock[0] = 160.0
+    worker.mood.emit(FaceMood(FaceState.FOCUSED, 100.0))  # same state: no new segment
+    clock[0] = 200.0
+    worker.mood.emit(FaceMood(FaceState.DEEP_THOUGHT, 200.0))
+    assert d.timeline.segments == [(100.0, FaceState.FOCUSED), (200.0, FaceState.DEEP_THOUGHT)]
+    d.timeline.resize(300, 20)
+    assert not d.timeline.grab().isNull()

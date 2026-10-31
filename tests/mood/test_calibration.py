@@ -9,7 +9,6 @@ from moodmusic.mood.calibration import (
     load_baseline,
     save_baseline,
 )
-from moodmusic.mood.groups import MoodGroup, classify
 from moodmusic.vision.types import EmotionReading
 
 
@@ -31,13 +30,15 @@ def test_resting_sad_face_becomes_neutral():
     assert c.done
     b = c.result()
     r = apply_baseline(reading(-0.35, -0.1, 0.3), b)
-    assert classify(r.valence, r.arousal, r.probs["neutral"]) == MoodGroup.FOCUS
+    assert abs(r.valence) < 0.05 and abs(r.arousal) < 0.05  # resting face reads as neutral
+    assert r.probs["neutral"] >= 0.6
 
 
 def test_real_smile_still_upbeat():
     b = calibrated().result()
     r = apply_baseline(reading(0.4, 0.3, 0.1), b)
-    assert classify(r.valence, r.arousal, r.probs["neutral"]) == MoodGroup.UPBEAT
+    assert r.valence > 0.5 and r.arousal > 0.3  # a real smile is clearly positive and lively
+    assert r.probs["neutral"] < 0.6
 
 
 def test_too_few_samples_raises():

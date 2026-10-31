@@ -56,6 +56,7 @@ class FakeWorker(QObject):
     camera_status = Signal(str)
     calibration_progress = Signal(float)
     calibration_done = Signal(object)
+    features_ready = Signal(object)
 
     def __init__(self):
         super().__init__()

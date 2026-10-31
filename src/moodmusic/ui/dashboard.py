@@ -13,6 +13,7 @@ from moodmusic.config import Settings, save_settings
 from moodmusic.ui.common import (BUTTON_CSS, CAMERA_MESSAGES, ArtLabel, DeviceButton,
                                  LoginButton, ModeToggle, StatusDot)
 from moodmusic.ui.mood_picker import MoodPicker
+from moodmusic.ui.state_panels import SignalsPanel, StateTimeline
 
 EMOTIONS = ("anger", "contempt", "disgust", "fear", "happiness", "neutral", "sadness", "surprise")
 BAR_COLORS = {"happiness": "#f7c948", "neutral": "#888888", "sadness": "#4a7bd0",
@@ -61,9 +62,9 @@ class Dashboard(QWidget):
     login_requested = Signal()
 
     def __init__(self, engine, worker, clock: Callable[[], float] = time.monotonic,
-                 save: Callable[[Settings], None] = save_settings) -> None:
+                 save: Callable[[Settings], None] = save_settings, baselines=None) -> None:
         super().__init__()
-        self._engine, self._worker = engine, worker
+        self._engine, self._worker, self._clock = engine, worker, clock
         self.setWindowTitle("Mood Music")
         self.resize(720, 420)
         self.setStyleSheet("QWidget { background:#16161b; color:#eee; }" + BUTTON_CSS
@@ -90,6 +91,9 @@ class Dashboard(QWidget):
             row.addWidget(label)
             row.addWidget(bar, 1)
             left.addLayout(row)
+        left.addWidget(QLabel("Signals (tick = your normal)"))
+        self.signals = SignalsPanel(baselines)
+        left.addWidget(self.signals)
         left.addStretch(1)
 
         self.chart = MoodChart(clock)
@@ -117,8 +121,10 @@ class Dashboard(QWidget):
         modes = QHBoxLayout()
         modes.addWidget(self.mood_label, 1)
         modes.addWidget(self.mode_toggle)
+        self.timeline = StateTimeline(clock)
         right = QVBoxLayout()
-        right.addWidget(QLabel("Mood over the last hour"))
+        right.addWidget(QLabel("States over the last hour"))
+        right.addWidget(self.timeline)
         right.addWidget(self.chart)
         right.addWidget(legend)
         right.addLayout(playing)
@@ -154,6 +160,7 @@ class Dashboard(QWidget):
         worker.preview.connect(self._on_preview)
         worker.mood.connect(self._on_mood)
         worker.camera_status.connect(self._on_camera_status)
+        worker.features_ready.connect(self.signals.set_features)
         self.refresh()
 
     def _on_reading(self, reading) -> None:
@@ -165,8 +172,11 @@ class Dashboard(QWidget):
             self.preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation))
 
-    def _on_mood(self, state) -> None:
-        self.mood_label.setText(f"{state.group.emoji} {state.group.label}")
+    def _on_mood(self, mood) -> None:
+        state = mood.state
+        self.mood_label.setText(f"{state.emoji} {state.label}")
+        self.mood_label.setToolTip(f"{state.label}: {mood.reason}" if mood.reason else state.label)
+        self.timeline.add(self._clock(), state)
 
     def _on_camera_status(self, status: str) -> None:
         if status != "ok":
@@ -192,7 +202,7 @@ class Dashboard(QWidget):
         self.login_btn.refresh()
 
     def _wrong_vibe(self) -> None:
-        group = MoodPicker.ask(self, "This song fits…")
+        group = MoodPicker.ask_group(self, "This song fits…")
         if group is not None:
             self._engine.wrong_vibe(group)
 

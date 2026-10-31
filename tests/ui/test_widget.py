@@ -3,7 +3,8 @@ from PySide6.QtGui import QColor
 from moodmusic.app.engine import EngineStatus
 from moodmusic.mood.groups import MoodGroup
 from moodmusic.mood.intent import Mode
-from moodmusic.mood.smoother import MoodState
+from moodmusic.mood.states import FaceState
+from moodmusic.mood.tracker import FaceMood
 from moodmusic.spotify.client import Device
 from moodmusic.ui import mood_picker
 from moodmusic.ui.common import DeviceButton
@@ -22,9 +23,11 @@ def make(qtbot, engine, worker, now=1000.0):
 
 def test_widget_shows_mood_and_song(qtbot, engine, worker, pick):
     w = make(qtbot, engine, worker, now=1000.0 + 6 * 60)
-    worker.mood.emit(MoodState(MoodGroup.UPBEAT, since=1000.0))
-    assert MoodGroup.UPBEAT.emoji in w.mood_label.text()
-    assert "Upbeat" in w.mood_label.text()
+    worker.mood.emit(FaceMood(FaceState.DEEP_THOUGHT, since=1000.0,
+                              reason="looking away 40 s, very still"))
+    assert FaceState.DEEP_THOUGHT.emoji in w.mood_label.text()
+    assert "Deep in thought" in w.mood_label.text()
+    assert w.mood_label.toolTip() == "Deep in thought: looking away 40 s, very still"
     assert w.steady_label.text() == "steady for 6 min"
     engine.current_pick = pick
     engine.notify()
@@ -35,14 +38,14 @@ def test_widget_shows_mood_and_song(qtbot, engine, worker, pick):
 
 def test_widget_just_now_and_quality_issue(qtbot, engine, worker):
     w = make(qtbot, engine, worker, now=1010.0)
-    worker.mood.emit(MoodState(MoodGroup.CHILL, since=1000.0))
+    worker.mood.emit(FaceMood(FaceState.HAPPY, since=1000.0))
     assert w.steady_label.text() == "just now"
     worker.quality.emit(QualityReport(False, "Too dark"))
     assert w.mood_label.text() == "Too dark"
     assert w.steady_label.text() == ""
     assert w.dot.color == QColor("#f5a623")
     worker.quality.emit(QualityReport(True))
-    assert "Chill" in w.mood_label.text()
+    assert "Happy" in w.mood_label.text()
 
 
 def test_wrong_vibe_disabled_without_pick(qtbot, engine, worker):
@@ -78,7 +81,8 @@ def test_wrong_vibe_opens_picker_and_calls_engine(qtbot, engine, worker, pick, m
     w = make(qtbot, engine, worker)
     engine.current_pick = pick
     engine.notify()
-    monkeypatch.setattr(MoodPicker, "ask", staticmethod(lambda parent, title: MoodGroup.INTENSE))
+    monkeypatch.setattr(MoodPicker, "ask_group",
+                        staticmethod(lambda parent, title: MoodGroup.INTENSE))
     w.wrong_btn.click()
     assert ("wrong_vibe", MoodGroup.INTENSE) in engine.calls
 
@@ -87,16 +91,17 @@ def test_wrong_vibe_cancel_does_nothing(qtbot, engine, worker, pick, monkeypatch
     w = make(qtbot, engine, worker)
     engine.current_pick = pick
     engine.notify()
-    monkeypatch.setattr(MoodPicker, "ask", staticmethod(lambda parent, title: None))
+    monkeypatch.setattr(MoodPicker, "ask_group", staticmethod(lambda parent, title: None))
     w.wrong_btn.click()
     assert not [c for c in engine.calls if c[0] == "wrong_vibe"]
 
 
 def test_not_how_i_feel_forces_mood_on_worker(qtbot, engine, worker, monkeypatch):
     w = make(qtbot, engine, worker)
-    monkeypatch.setattr(MoodPicker, "ask", staticmethod(lambda parent, title: MoodGroup.FOCUS))
+    monkeypatch.setattr(MoodPicker, "ask_state",
+                        staticmethod(lambda parent, title: FaceState.FOCUSED))
     w.feel_btn.click()
-    assert ("force_mood", MoodGroup.FOCUS) in worker.calls
+    assert ("force_mood", FaceState.FOCUSED) in worker.calls
 
 
 def test_transport_buttons(qtbot, engine, worker):
@@ -127,9 +132,9 @@ def test_advanced_button_emits(qtbot, engine, worker):
     assert sig.args == ["advanced"]
 
 
-def test_mood_picker_has_five_options():
-    assert list(mood_picker.CHOICES) == [
-        MoodGroup.UPBEAT, MoodGroup.CHILL, MoodGroup.MELANCHOLY, MoodGroup.INTENSE, MoodGroup.FOCUS]
+def test_mood_picker_choices():
+    assert list(mood_picker.STATE_CHOICES) == list(FaceState)
+    assert list(mood_picker.GROUP_CHOICES) == [g for g in MoodGroup if g != MoodGroup.UNSORTED]
 
 
 def test_status_dot_shows_camera_problems(qtbot, engine, worker):
