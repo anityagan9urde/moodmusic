@@ -40,6 +40,10 @@
 - **Explainability:** every state carries a short reason string built from the features that drove it, e.g. "looking away 40 s, very still".
 - Analysis stays at 8 fps, and per-frame work stays cheap arithmetic.
 
+## Switch-over note
+
+Tasks 1–7 are additive (new modules alongside the old pipeline). Tasks 8–10 switch the worker, engine and UI over; between Task 8 and Task 10 the test suite stays green but the running app is only fully consistent again after Task 10. Don't hand the app to the user mid-switch.
+
 ## Review Focus
 
 1. **Talking on a call** (mouth moving, eyes on screen, sometimes smiling) must not read as Excited or Deep in thought. Its most likely reading is Focused or Happy. Test in Task 6.
@@ -61,8 +65,9 @@ src/moodmusic/
     features.py        NEW  FeatureTracker -> Features (rolling windows)
     baselines.py       NEW  PersonalBaselines (calibration + passive rolling medians, persisted)
     rules.py           NEW  score_states(features, baselines, bias) -> {FaceState: Score}; decide()
-    smoother.py        MOD  MoodState(state, since, reason, valence, arousal, probs, candidate); StateTracker replaces MoodSmoother
-    corrections.py     MOD  per-state bias store (state_corrections.jsonl)
+    tracker.py         NEW  FaceMood(state, since, reason, valence, arousal, probs, candidate); StateTracker
+    state_corrections.py NEW per-state bias store (state_corrections.jsonl)
+    smoother.py, corrections.py  DELETED in Task 10 (old five-label pipeline)
   vision/
     signals.py         NEW  FrameSignals + extract_signals(obs, reading)
   music/
@@ -155,13 +160,13 @@ scripts/record_signals.py  NEW  spike: prompts + CSV of FrameSignals (numbers on
   - PARTY: party, club, dance, edm, bhangra, banger
   - UPBEAT: drop "party" and "dance" (they move to PARTY); keep happy, feel good, upbeat, fun, summer
 - **`SongLibrary`:** new table `play_history(uri TEXT PRIMARY KEY, last_played REAL)` created if missing. Add `record_play(uri: str, t: float) -> None` and `last_played() -> dict[str, float]`.
-- **`SongSelector.pick(groups: list[MoodGroup], mood: MoodState, fresh: bool = False, now: float = 0.0) -> Pick | None`:**
+- **`SongSelector.pick(groups: list[MoodGroup], mood, fresh: bool = False, now: float = 0.0) -> Pick | None`:**
   - Try each group in order, then `nearest_groups(groups[0])`.
   - With `fresh`, pool all songs from `groups` and choose randomly among the 25% least recently played (never-played songs first).
   - `mark_played(uri, now)` also calls `library.record_play`.
   - `Pick` gains `groups: list[MoodGroup]`.
   - Reason format: `"{Group}: you seem {state label lowercase}; tagged a, b"`. On fallback, append `" (no {Target} songs yet)"`. With fresh, use `"; something you haven't heard in a while"`.
-  - MoodState comes from Task 7. Until then, accept any object with a `.state.label` attribute and use `"you seem …"` from it. Tests use a stub.
+  - Until Task 10, the selector accepts either the old `MoodState` (use `.group.label`) or the new `FaceMood` (use `.state.label`). Tests use stubs.
 
 - [ ] **Step 1: Write failing tests.**
   - `test_db_values_unchanged`: `MoodGroup("chill") is MoodGroup.CHILL`, and the same for focus, upbeat, melancholy, intense and unsorted.
@@ -330,15 +335,15 @@ scripts/record_signals.py  NEW  spike: prompts + CSV of FrameSignals (numbers on
 
 ### Task 7: State tracker and per-state corrections
 
-**Files:** Modify `src/moodmusic/mood/smoother.py` and `src/moodmusic/mood/corrections.py`. Tests: `tests/mood/test_smoother.py` and `tests/mood/test_corrections.py`, both rewritten.
+**Files:** Create `src/moodmusic/mood/tracker.py` and `src/moodmusic/mood/state_corrections.py`. Tests: `tests/mood/test_tracker.py` and `tests/mood/test_state_corrections.py`. This task is additive: the old `smoother.py` and `corrections.py` stay until Task 10 deletes them.
 
 **Interfaces:**
-- **`MoodState`:** frozen, with `state: FaceState = FaceState.FOCUSED`, `since: float = 0.0`, `reason: str = ""`, `valence: float = 0.0`, `arousal: float = 0.0`, `probs: dict = {}`, `candidate: FaceState | None = None`.
+- **`FaceMood`:** frozen, with `state: FaceState = FaceState.FOCUSED`, `since: float = 0.0`, `reason: str = ""`, `valence: float = 0.0`, `arousal: float = 0.0`, `probs: dict = {}`, `candidate: FaceState | None = None`.
 - **`StateTracker(hold_seconds: float)`** with:
-  - `.update(decision: tuple[FaceState | None, str], f: Features, t: float) -> MoodState`. Candidate and hold logic match the old smoother. A `None` decision clears nothing and keeps the current state and candidate timer. Valence, arousal and probs come from `f`.
-  - `.force(state: FaceState, t: float) -> MoodState`: reason "you said so".
+  - `.update(decision: tuple[FaceState | None, str], f: Features, t: float) -> FaceMood`. Candidate and hold logic match the old smoother. A `None` decision clears nothing and keeps the current state and candidate timer. Valence, arousal and probs come from `f`.
+  - `.force(state: FaceState, t: float) -> FaceMood`: reason "you said so".
   - `.state` and `.set_hold(seconds)`.
-- **`CorrectionStore(path)`** with:
+- **`StateCorrections(path)`** with:
   - `.record(predicted: FaceState, actual: FaceState) -> None`
   - `.bias() -> dict[FaceState, float]`: for each record, +0.05 to `actual` and −0.05 to `predicted`, over the last 50 records, capped ±0.25 per state. Cached and recomputed on `record`. A corrupt file or decode error gives an empty bias.
   - The default path is `data_dir()/"state_corrections.jsonl"`.
@@ -351,7 +356,7 @@ scripts/record_signals.py  NEW  spike: prompts + CSV of FrameSignals (numbers on
   - `test_old_corrections_file_ignored`: a `corrections.jsonl` in the same dir does not affect bias.
   - `test_corrupt_lines_skipped`
 - [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3:** Implement. Remove `MoodSmoother` and fix imports.
+- [ ] **Step 3:** Implement the new modules only. Leave the old pipeline untouched.
 - [ ] **Step 4:** Run them. Expected: PASS.
 - [ ] **Step 5:** Commit with message `feat: state tracker with hold time and per-state corrections`.
 
@@ -369,6 +374,7 @@ scripts/record_signals.py  NEW  spike: prompts + CSV of FrameSignals (numbers on
 - Baselines are saved every 5 minutes and on stop.
 - New signal: `features_ready = Signal(object)`.
 - `force_mood(state: FaceState)` records `corrections.record(predicted=tracker.state.state, actual=state)` and then `tracker.force`.
+- `mood` now emits `FaceMood`. `corrections` becomes a `StateCorrections`.
 - Constructor: replace `smoother` with `tracker: StateTracker`, and add `baselines: PersonalBaselines`, with `baselines_path: Path | None = None`. `set_hold_seconds` forwards to `tracker.set_hold`.
 
 - [ ] **Step 1: Update and write failing tests** with fakes:
@@ -388,7 +394,7 @@ scripts/record_signals.py  NEW  spike: prompts + CSV of FrameSignals (numbers on
 **Files:** Modify `src/moodmusic/app/engine.py` and `tests/app/test_engine.py`
 
 **Interfaces:**
-- **`on_mood(state: MoodState)`:** unchanged contract (records only).
+- **`on_mood(state: FaceMood)`:** unchanged contract (records only). Every use of `MoodState` / `.group` becomes `FaceMood` / `.state`.
 - **Choosing a song** (`_choose()`):
   1. `intent = intent_for(mood.state, self._mode, self._lift_step, hour, rng)`, where `hour = self._hour()` (an injectable `hour_fn: Callable[[], int] = lambda: datetime.now().hour`).
   2. `selector.pick(intent.groups, mood, fresh=intent.fresh, now=clock())`.
@@ -422,14 +428,18 @@ scripts/record_signals.py  NEW  spike: prompts + CSV of FrameSignals (numbers on
   - "Not how I feel" uses `ask_state` and "Wrong vibe" uses `ask_group`.
 - **Widget:**
   - The mood line shows `f"{state.emoji} {state.label}"`, plus "steady for N min".
-  - Its tooltip is `MoodState.reason`, e.g. "Deep in thought: looking away 40 s, very still".
+  - Its tooltip is `FaceMood.reason`, e.g. "Deep in thought: looking away 40 s, very still".
   - The quality-issue override is unchanged.
 - **Dashboard:**
   - **Signals panel:** replaces nothing; it sits below the emotion bars. Fed by `worker.features_ready`, it shows one bar per signal against the user's baseline marker: gaze on screen, blink rate, stillness, smile, tension (mean of brow_down and mouth_press) and eye openness (1 − perclos).
   - **State timeline:** a coloured strip for the session (last 60 min), one segment per state change. Keep the positive/energy chart underneath.
   - Now playing shows the pick reason, which includes the intent note.
 - **Review dialog:** 8 group lists plus Unsorted, in the order Focus, Profound, Romantic, Chill, Upbeat, Party, Melancholy, Intense, Unsorted.
-- **`main.py`:** constructs `StateTracker`, `PersonalBaselines` (via `load_baselines`) and `CorrectionStore` at `state_corrections.jsonl`, and connects `features_ready` to the dashboard.
+- **`main.py`:** constructs `StateTracker`, `PersonalBaselines` (via `load_baselines`) and `StateCorrections(data_dir()/"state_corrections.jsonl")`, and connects `features_ready` to the dashboard.
+- **Remove the old pipeline:**
+  - Delete `mood/smoother.py`, `mood/corrections.py` and their tests.
+  - The `selector.py` reason uses `FaceMood.state.label` only; drop the Task 2 fallback.
+  - Grep must find no remaining `MoodState`, `MoodSmoother` or `CorrectionStore` references.
 
 - [ ] **Step 1: Write and update failing tests.**
   - `test_widget_shows_state_label_and_reason_tooltip`
