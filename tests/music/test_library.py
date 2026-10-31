@@ -67,3 +67,14 @@ def test_play_history_roundtrip(tmp_path):
     lib.close()
     lib = SongLibrary(tmp_path / "h.db")
     assert lib.last_played() == {"u1": 20.0, "u2": 15.0}
+
+
+def test_clear_override_lets_scans_regroup(tmp_path):
+    lib = SongLibrary(tmp_path / "o.db")
+    lib.upsert(Song("u1", "T", "A", None, MoodGroup.CHILL, [], "track", False))
+    lib.set_group("u1", MoodGroup.PARTY, by_user=True)
+    lib.clear_override("u1")
+    s = lib.get("u1")
+    assert not s.override and s.source == "none"
+    lib.upsert(Song("u1", "T", "A", None, MoodGroup.UPBEAT, [], "track", False))
+    assert lib.get("u1").group == MoodGroup.UPBEAT  # a rescan may now regroup it

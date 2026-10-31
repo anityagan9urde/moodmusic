@@ -79,6 +79,12 @@ class SongLibrary:
                 self._db.execute("UPDATE songs SET grp=? WHERE uri=?", (group.value, uri))
             self._db.commit()
 
+    def clear_override(self, uri: str) -> None:
+        """Forget a user's filing so the next scan may regroup the song."""
+        with self._lock:
+            self._db.execute("UPDATE songs SET override=0, source='none' WHERE uri=?", (uri,))
+            self._db.commit()
+
     def songs(self, group: MoodGroup | None = None) -> list[Song]:
         with self._lock:
             if group is None:
