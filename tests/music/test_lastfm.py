@@ -118,3 +118,14 @@ def test_track_tags_uses_cleaned_title():
     c, s, _, _ = make([FakeResp(200, TAGS)])
     c.track_tags("A", "Song - Remastered 2011")
     assert s.calls[0][1]["track"] == "Song"
+
+
+def test_connection_error_does_not_leak_api_key():
+    url = "https://ws.audioscrobbler.com/2.0/?method=x&api_key=SECRETKEY&format=json"
+    errs = [requests.ConnectionError(f"HTTPSConnectionPool: Max retries exceeded with url: {url}")] * 3
+    c, _, _, _ = make(errs)
+    c.api_key = "SECRETKEY"
+    with pytest.raises(LastFmError) as ei:
+        c.artist_tags("A")
+    assert "SECRETKEY" not in str(ei.value)
+    assert "SECRETKEY" not in repr(ei.value)

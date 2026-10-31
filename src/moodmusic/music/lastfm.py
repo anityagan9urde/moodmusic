@@ -36,6 +36,9 @@ def clean_title(title: str) -> str:
     return out.strip() or title.strip()
 
 
+_KEY_PARAM = re.compile(r"(api_key=)[^&\s'\")]*", re.I)
+
+
 class LastFmClient:
     def __init__(
         self,
@@ -87,6 +90,10 @@ class LastFmClient:
                 continue
         return out
 
+    def _scrub(self, text: str) -> str:
+        text = _KEY_PARAM.sub(r"***", text)
+        return text.replace(self.api_key, "***") if self.api_key else text
+
     def _request(self, params: dict) -> dict | None:
         last_err = "unknown error"
         for attempt in range(ATTEMPTS):
@@ -96,7 +103,7 @@ class LastFmClient:
             try:
                 resp = self.session.get(API_URL, params=params, timeout=TIMEOUT)
             except requests.RequestException as e:
-                last_err = f"connection error: {e}"
+                last_err = f"connection error: {type(e).__name__}"
                 continue
             status = resp.status_code
             if status == 429 or status >= 500:
@@ -107,7 +114,7 @@ class LastFmClient:
             try:
                 data = resp.json()
             except ValueError as e:
-                raise LastFmError(f"invalid JSON: {e}") from e
+                raise LastFmError(self._scrub(f"invalid JSON: {e}")) from None
             if isinstance(data, dict) and "error" in data:
                 code = data.get("error")
                 if code == ERR_NOT_FOUND:
@@ -116,6 +123,8 @@ class LastFmClient:
                 if code == ERR_RATE_LIMIT:
                     last_err = f"rate limited: {msg}"
                     continue
-                raise LastFmError(f"Last.fm error {code}: {msg}")
+                raise LastFmError(self._scrub(f"Last.fm error {code}: {msg}"))
             return data
-        raise LastFmError(f"Last.fm request failed after {ATTEMPTS} attempts: {last_err}")
+        raise LastFmError(
+            self._scrub(f"Last.fm request failed after {ATTEMPTS} attempts: {last_err}")
+        )
