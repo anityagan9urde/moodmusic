@@ -75,11 +75,15 @@ class ScanThread(QThread):
     def __init__(self, scanner, playlist_id) -> None:
         super().__init__()
         self._scanner, self._playlist_id, self._stop = scanner, playlist_id, False
+        self.result = None
 
     def stop(self) -> bool:
         """Ask the scan to stop; True once the thread has actually finished."""
         self._stop = True
         return self.wait(3000)
+
+    def request_stop(self) -> None:
+        self._stop = True
 
     def run(self) -> None:
         try:
@@ -87,6 +91,7 @@ class ScanThread(QThread):
         except Exception:
             log.exception("Library scan failed")
             result = None
+        self.result = result
         self.finished_with.emit(result)
 
 
@@ -100,22 +105,46 @@ class ScanController(QObject):
         super().__init__()
         self._make_scanner, self._get_playlist = make_scanner, get_playlist
         self._threads: list[ScanThread] = []
+        self._current: ScanThread | None = None
+        self._pending = False
 
     def is_running(self) -> bool:
-        return any(t.isRunning() for t in self._threads)
+        return self._current is not None
 
     def rescan(self) -> None:
-        if self.is_running():
+        """Start a scan; if one is running, end it early and run exactly one more after it."""
+        if self._current is not None:
+            self._pending = True
+            self._current.request_stop()
             return
-        self._threads = [t for t in self._threads if t.isRunning()]
         thread = ScanThread(self._make_scanner(), self._get_playlist())
         thread.progress.connect(self.progress)
-        thread.finished_with.connect(self.finished_with)
-        self._threads.append(thread)
+        thread.finished.connect(self._on_thread_finished)  # QObject slot: runs on the GUI thread
+        self._threads = [t for t in self._threads if t.isRunning()] + [thread]
+        self._current = thread
         thread.start()
 
+    @Slot()
+    def _on_thread_finished(self) -> None:
+        thread, self._current = self._current, None
+        if thread is not None:
+            self.finished_with.emit(thread.result)
+        if self._pending:
+            self._pending = False
+            self.rescan()
+
     def stop(self) -> bool:
+        self._pending = False
         return all([t.stop() for t in self._threads])
+
+
+def build_scanner(settings: Settings, library, make_spotify_fn=None):
+    """A Scanner using the *current* Spotify client id (own service avoids a token-refresh race)."""
+    from moodmusic.music.lastfm import LastFmClient
+    from moodmusic.music.scanner import Scanner
+    from moodmusic.spotify.client import SpotifyService, make_spotify
+    sp = (make_spotify_fn or make_spotify)(settings.spotify_client_id)
+    return Scanner(SpotifyService(sp), LastFmClient(settings.lastfm_api_key), library)
 
 
 def report_scan(result, notify: Callable[[str, str], None]) -> None:
@@ -172,9 +201,7 @@ def run() -> int:
     from moodmusic.mood.calibration import load_baseline
     from moodmusic.mood.corrections import CorrectionStore
     from moodmusic.mood.smoother import MoodSmoother
-    from moodmusic.music.lastfm import LastFmClient
     from moodmusic.music.library import SongLibrary
-    from moodmusic.music.scanner import Scanner
     from moodmusic.music.selector import SongSelector
     from moodmusic.spotify.client import SpotifyService, make_spotify
     from moodmusic.vision.camera import CameraSource
@@ -182,7 +209,6 @@ def run() -> int:
     from moodmusic.vision.face import FaceTracker
 
     service = SpotifyService(make_spotify(settings.spotify_client_id))
-    scan_service = SpotifyService(make_spotify(settings.spotify_client_id))  # own instance avoids a token-refresh race
     library = SongLibrary(data_dir() / "library.db")
     selector = SongSelector(library, random.Random())
     corrections = CorrectionStore(data_dir() / "corrections.jsonl")
@@ -216,7 +242,7 @@ def run() -> int:
                      settings, engine, worker, scan)
 
     scan = ScanController(
-        lambda: Scanner(scan_service, LastFmClient(settings.lastfm_api_key), library),
+        lambda: build_scanner(settings, library),
         lambda: settings.source_playlist_id)
     scan.finished_with.connect(lambda r: report_scan(r, tray.message))
     tray = Tray(engine, views, open_settings, quit_app)

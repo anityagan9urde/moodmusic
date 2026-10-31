@@ -131,3 +131,49 @@ def test_scan_controller_runs_one_at_a_time(qtbot):
     assert fin.args == ["done"]
     qtbot.waitUntil(lambda: not c.is_running(), timeout=3000)
     assert c.stop() is True
+
+
+def test_rescan_while_running_queues_exactly_one_followup(qtbot):
+    import threading
+    from moodmusic.ui.main import ScanController
+
+    started, gate, runs = [], threading.Event(), []
+
+    class Scanner:
+        def run(self, pid, on_progress, should_stop):
+            runs.append(1)
+            if len(runs) == 1:
+                started.append(1)
+                gate.wait(3)
+                assert should_stop()  # the queued rescan asked the first scan to end early
+            return len(runs)
+
+    c = ScanController(lambda: Scanner(), lambda: None)
+    results = []
+    c.finished_with.connect(results.append)
+    c.rescan()
+    qtbot.waitUntil(lambda: bool(started), timeout=3000)
+    c.rescan()
+    c.rescan()  # repeated requests still produce a single follow-up
+    assert c.is_running()
+    gate.set()
+    qtbot.waitUntil(lambda: len(results) == 2 and not c.is_running(), timeout=3000)
+    qtbot.wait(100)
+    assert len(runs) == 2 and len(results) == 2
+    assert c.stop() is True
+
+
+def test_build_scanner_uses_current_client_id():
+    from moodmusic.ui.main import build_scanner
+
+    seen = []
+    s = Settings(spotify_client_id="old")
+
+    def fake_make(cid):
+        seen.append(cid)
+        return object()
+
+    build_scanner(s, library=None, make_spotify_fn=fake_make)
+    s.spotify_client_id = "new"
+    build_scanner(s, library=None, make_spotify_fn=fake_make)
+    assert seen == ["old", "new"]
