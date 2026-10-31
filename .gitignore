@@ -1,1 +1,8 @@
 .superpowers/
+
+.venv/
+__pycache__/
+dist/
+build/
+*.egg-info/
+src/moodmusic/resources/lastfm_key.txt

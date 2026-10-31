@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moodmusic"
+version = "0.1.0"
+description = "Reads your mood from the webcam locally and plays matching songs from your Spotify."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "mediapipe",
+  "hsemotion-onnx",
+  "onnxruntime",
+  "opencv-python",
+  "PySide6",
+  "spotipy",
+  "requests",
+  "keyring",
+  "platformdirs",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-qt", "pyinstaller"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
