@@ -181,6 +181,40 @@ def _run_wizard(settings: Settings) -> Settings | None:
     return settings if settings.setup_complete else None
 
 
+def start_update_check(on_found: Callable[[str], None], current: str | None = None,
+                       repo: str | None = None,
+                       check: Callable[[str, str], str | None] | None = None):
+    """Check for a newer release on a daemon thread; `on_found(url)` runs on the GUI thread.
+
+    Returns the relay object (keep it alive), or None without any thread when no update repo
+    is configured.
+    """
+    import threading
+
+    from moodmusic import __version__
+    from moodmusic.app import updates
+    from moodmusic.config import UPDATE_REPO
+    repo = UPDATE_REPO if repo is None else repo
+    if not repo:
+        return None
+    current = __version__ if current is None else current
+    check = check or updates.check_for_update
+
+    class _Relay(QObject):
+        found = Signal(str)
+
+    relay = _Relay()
+    relay.found.connect(on_found)
+
+    def work() -> None:
+        url = check(current, repo)
+        if url:
+            relay.found.emit(url)
+
+    threading.Thread(target=work, name="update-check", daemon=True).start()
+    return relay
+
+
 def run() -> int:
     from moodmusic.ui.dashboard import Dashboard
     from moodmusic.ui.tray import Tray, make_icon
@@ -276,8 +310,23 @@ def run() -> int:
         worker.start_calibration()
         tray.message("Mood Music", "Calibrating: look at the camera for about 20 seconds.")
 
+    update_url: list[str] = []
+
+    def on_update_found(url: str) -> None:
+        update_url[:] = [url]
+        tray.message("Update available", f"A new Mood Music is out: {url} (click to open)")
+
+    def on_message_clicked() -> None:
+        if update_url:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(update_url.pop()))
+
+    tray.icon.messageClicked.connect(on_message_clicked)
+    updater = start_update_check(on_update_found)
+
     scan.rescan()
     views.show_view(settings.view)
-    app._moodmusic_refs = (bridge, tray, views)  # keep alive for the event loop
+    app._moodmusic_refs = (bridge, tray, views, updater)  # keep alive for the event loop
     code = app.exec()
     return code

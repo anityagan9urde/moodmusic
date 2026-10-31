@@ -177,3 +177,25 @@ def test_build_scanner_uses_current_client_id():
     s.spotify_client_id = "new"
     build_scanner(s, library=None, make_spotify_fn=fake_make)
     assert seen == ["old", "new"]
+
+
+def test_update_check_skipped_without_repo():
+    from moodmusic.ui.main import start_update_check
+    assert start_update_check(lambda url: None, repo="") is None
+
+
+def test_update_check_delivers_url_on_gui_thread(qtbot):
+    from moodmusic.ui.main import start_update_check
+    got = []
+    relay = start_update_check(got.append, current="0.1.0", repo="a/b",
+                               check=lambda cur, repo: "https://x/r")
+    qtbot.waitUntil(lambda: got == ["https://x/r"], timeout=3000)
+    assert relay is not None
+
+
+def test_update_check_silent_when_up_to_date(qtbot):
+    from moodmusic.ui.main import start_update_check
+    got = []
+    start_update_check(got.append, current="0.1.0", repo="a/b", check=lambda c, r: None)
+    qtbot.wait(200)
+    assert got == []

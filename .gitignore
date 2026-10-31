@@ -6,3 +6,5 @@ dist/
 build/
 *.egg-info/
 src/moodmusic/resources/lastfm_key.txt
+src/moodmusic/resources/*.task
+src/moodmusic/resources/*.onnx

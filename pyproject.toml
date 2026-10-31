@@ -8,15 +8,16 @@ version = "0.1.0"
 description = "Reads your mood from the webcam locally and plays matching songs from your Spotify."
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "mediapipe",
-  "hsemotion-onnx",
-  "onnxruntime",
-  "opencv-python",
-  "PySide6",
-  "spotipy",
-  "requests",
-  "keyring",
-  "platformdirs",
+  "mediapipe>=0.10",
+  "hsemotion-onnx>=0.3",
+  "onnxruntime>=1.18",
+  "opencv-contrib-python>=4.8",  # also pulled in by mediapipe; do not add opencv-python (both provide cv2)
+  "PySide6>=6.6",
+  "spotipy>=2.23",
+  "requests>=2.31",
+  "keyring>=24",
+  "platformdirs>=4",
+  "packaging>=23",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +25,9 @@ dev = ["pytest", "pytest-qt", "pyinstaller"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+moodmusic = ["resources/*.txt"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

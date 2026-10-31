@@ -19,7 +19,10 @@ PAGE_WELCOME, PAGE_SPOTIFY, PAGE_LASTFM, PAGE_CAMERA, PAGE_CALIBRATION, PAGE_SOU
 
 def bundled_lastfm_key() -> str | None:
     """Key shipped in resources/lastfm_key.txt (works unpacked and in a PyInstaller bundle)."""
-    path = Path(__file__).resolve().parent.parent / "resources" / "lastfm_key.txt"
+    from moodmusic.resources import resource_path
+    path = resource_path("lastfm_key.txt")
+    if path is None:
+        return None
     try:
         key = path.read_text(encoding="utf-8").strip()
     except OSError:

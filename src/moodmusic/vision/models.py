@@ -8,6 +8,7 @@ from pathlib import Path
 import requests
 
 from moodmusic.config import data_dir
+from moodmusic.resources import resource_path
 
 log = logging.getLogger(__name__)
 
@@ -19,8 +20,8 @@ _FILENAME = "face_landmarker.task"
 
 
 def _bundled_path() -> Path | None:
-    """Hook for a bundled copy (packaged builds); none for now."""
-    return None
+    """The face landmarker shipped in the package/bundle, if any."""
+    return resource_path(_FILENAME)
 
 
 def face_landmarker_path() -> Path:

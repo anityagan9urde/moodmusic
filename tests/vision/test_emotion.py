@@ -36,3 +36,20 @@ def test_valence_clamped(monkeypatch):
     r = m.predict(np.zeros((224, 224, 3), np.uint8))
     assert r.valence == 1.0
     assert r.arousal == -1.0
+
+
+def test_install_bundled_model_copies_once(monkeypatch, tmp_path):
+    src = tmp_path / "bundle.onnx"
+    src.write_bytes(b"onnx")
+    monkeypatch.setattr(emotion, "resource_path", lambda n: src if n == "m.onnx" else None)
+    cache = tmp_path / "cache"
+    assert emotion.install_bundled_model("m", cache) is True
+    assert (cache / "m.onnx").read_bytes() == b"onnx"
+    src.write_bytes(b"changed")
+    assert emotion.install_bundled_model("m", cache) is True  # cached copy kept
+    assert (cache / "m.onnx").read_bytes() == b"onnx"
+
+
+def test_install_bundled_model_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr(emotion, "resource_path", lambda n: None)
+    assert emotion.install_bundled_model("m", tmp_path / "c") is False
