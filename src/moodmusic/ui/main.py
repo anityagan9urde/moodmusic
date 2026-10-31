@@ -138,8 +138,18 @@ class ScanController(QObject):
         return all([t.stop() for t in self._threads])
 
 
+def make_engine_service(client_id: str, make_spotify_fn=None):
+    """GUI-thread Spotify service: non-interactive auth, never sleeps on 429."""
+    from moodmusic.spotify.client import SpotifyService, make_spotify
+    return SpotifyService((make_spotify_fn or make_spotify)(client_id), retry_429=False)
+
+
 def build_scanner(settings: Settings, library, make_spotify_fn=None):
-    """A Scanner using the *current* Spotify client id (own service avoids a token-refresh race)."""
+    """A Scanner built fresh per scan with the *current* Spotify client id.
+
+    make_spotify uses the non-interactive auth manager, so a scan never opens a browser;
+    token refreshes are serialised with the engine's by spotify.auth.TOKEN_LOCK.
+    """
     from moodmusic.music.lastfm import LastFmClient
     from moodmusic.music.scanner import Scanner
     from moodmusic.spotify.client import SpotifyService, make_spotify
@@ -237,13 +247,12 @@ def run() -> int:
     from moodmusic.mood.smoother import MoodSmoother
     from moodmusic.music.library import SongLibrary
     from moodmusic.music.selector import SongSelector
-    from moodmusic.spotify.client import SpotifyService, make_spotify
+    from moodmusic.ui.login import LoginController
     from moodmusic.vision.camera import CameraSource
     from moodmusic.vision.emotion import HSEmotionModel
     from moodmusic.vision.face import FaceTracker
 
-    # GUI-thread service: never sleeps on 429 (the engine backs off itself).
-    service = SpotifyService(make_spotify(settings.spotify_client_id), retry_429=False)
+    service = make_engine_service(settings.spotify_client_id)
     library = SongLibrary(data_dir() / "library.db")
     selector = SongSelector(library, random.Random())
     corrections = CorrectionStore(data_dir() / "corrections.jsonl")
@@ -272,15 +281,34 @@ def run() -> int:
         tray.icon.hide()
         app.quit()
 
+    def rebuild_service() -> None:
+        """After login, logout or a Client ID change: a fresh client for the engine."""
+        engine.set_service(make_engine_service(settings.spotify_client_id))
+
+    def on_logged_in() -> None:
+        rebuild_service()
+        scan.rescan()
+
+    login = LoginController(lambda: settings.spotify_client_id, on_logged_in,
+                            lambda title, text: tray.message(title, text))
+
     def open_settings() -> None:
-        _open_dialog("moodmusic.ui.settings_dialog", "SettingsDialog", "Settings", tray,
-                     settings, engine, worker, scan)
+        try:
+            from moodmusic.ui.settings_dialog import SettingsDialog
+        except Exception:
+            log.exception("Settings is not available")
+            tray.message("Mood Music", "Settings isn't available")
+            return
+        SettingsDialog(settings, engine, worker, scan,
+                       on_spotify_changed=rebuild_service).exec()
 
     scan = ScanController(
         lambda: build_scanner(settings, library),
         lambda: settings.source_playlist_id)
     scan.finished_with.connect(lambda r: report_scan(r, tray.message))
-    tray = Tray(engine, views, open_settings, quit_app)
+    tray = Tray(engine, views, open_settings, quit_app, on_login=login.start)
+    widget.login_requested.connect(login.start)
+    dashboard.login_requested.connect(login.start)
     dashboard.settings_requested.connect(open_settings)
     dashboard.review_requested.connect(
         lambda: _open_dialog("moodmusic.ui.review_dialog", "ReviewDialog", "Song review",
@@ -328,6 +356,6 @@ def run() -> int:
 
     scan.rescan()
     views.show_view(settings.view)
-    app._moodmusic_refs = (bridge, tray, views, updater)  # keep alive for the event loop
+    app._moodmusic_refs = (bridge, tray, views, updater, login)  # keep alive for the event loop
     code = app.exec()
     return code

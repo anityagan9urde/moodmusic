@@ -30,8 +30,11 @@ def bundled_lastfm_key() -> str | None:
     return key or None
 
 
-def _default_login(client_id: str) -> None:
+def _default_login(client_id: str, cancel=None) -> None:
+    """Browser login (180 s timeout, cancellable), then check the account is Premium."""
+    from moodmusic.spotify.auth import login_interactive
     from moodmusic.spotify.client import SpotifyService, make_spotify
+    login_interactive(client_id, cancel=cancel)
     SpotifyService(make_spotify(client_id)).check_premium()
 
 

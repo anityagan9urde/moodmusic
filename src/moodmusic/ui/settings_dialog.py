@@ -29,20 +29,24 @@ def open_log_file() -> None:
 
 class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, engine, worker, scan=None, parent=None, *,
-                 playlists_fn: Callable[[], list] | None = None) -> None:
+                 playlists_fn: Callable[[], list] | None = None,
+                 cameras_fn: Callable[[], list[int]] | None = None,
+                 on_spotify_changed: Callable[[], None] | None = None) -> None:
         super().__init__(parent)
         self.settings, self.engine, self.worker, self.scan = settings, engine, worker, scan
         self._playlists_fn = playlists_fn or (lambda: load_playlists(settings.spotify_client_id))
+        self._on_spotify_changed = on_spotify_changed
         self._runner = AsyncRunner(self)
+        self._camera_runner = AsyncRunner(self)
         self.setWindowTitle("Mood Music settings")
         lay = QVBoxLayout(self)
         form = QFormLayout()
         lay.addLayout(form)
 
         self.camera = QComboBox()
-        for i in list_cameras() or [settings.camera_index]:
-            self.camera.addItem(f"Camera {i}", i)
-        self.camera.setCurrentIndex(max(self.camera.findData(settings.camera_index), 0))
+        self._set_cameras([])  # the saved camera right away; probing runs off the GUI thread
+        self._camera_runner.run(cameras_fn or (lambda: list_cameras()),
+                                lambda cams, err: self._set_cameras(cams if err is None else []))
         form.addRow("Camera (applies after restart)", self.camera)
 
         self.sensitivity = QComboBox()
@@ -100,6 +104,22 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
 
+    def _set_cameras(self, cameras) -> None:
+        """Probed cameras plus the saved one (it may be busy, so probing can miss it)."""
+        current = self.camera.currentData()
+        chosen = self.settings.camera_index if current is None else current
+        self.camera.clear()
+        for i in sorted(set(cameras or []) | {self.settings.camera_index}):
+            self.camera.addItem(f"Camera {i}", i)
+        self.camera.setCurrentIndex(max(self.camera.findData(chosen), 0))
+
+    def _spotify_changed(self) -> None:
+        if self._on_spotify_changed is not None:
+            try:
+                self._on_spotify_changed()
+            except Exception:
+                log.exception("Could not rebuild the Spotify client")
+
     def _recalibrate(self) -> None:
         self.recalibrate_button.setEnabled(False)
         self.note.setText("Calibrating — relax and look at the camera…")
@@ -132,15 +152,18 @@ class SettingsDialog(QDialog):
 
     def done(self, result: int) -> None:
         self._runner.close()
+        self._camera_runner.close()
         super().done(result)
 
     def _logout(self) -> None:
         logout_spotify()
-        self.note.setText("Logged out. You'll be asked to log in again next launch.")
+        self._spotify_changed()
+        self.note.setText("Logged out. Use \"Log in to Spotify\" to log in again.")
 
     def save(self) -> None:
         s = self.settings
-        s.camera_index = self.camera.currentData() or 0
+        cam = self.camera.currentData()
+        s.camera_index = cam if cam is not None else s.camera_index
         s.sensitivity = self.sensitivity.currentData()
         s.switch_mode = "immediate" if self.immediate.isChecked() else "wait"
         s.away_pause_minutes = self.away.value()
@@ -153,6 +176,8 @@ class SettingsDialog(QDialog):
         old_source = s.source_playlist_id
         s.source_playlist_id = self.playlist.currentData()
         save_settings(s)
+        if new_id_changed:
+            self._spotify_changed()  # the engine must use the new Client ID now
         if self.scan is not None and (s.source_playlist_id != old_source or new_id_changed):
             self.scan.rescan()
         self.worker.set_hold_seconds(HOLD_SECONDS.get(s.sensitivity, HOLD_SECONDS["normal"]))

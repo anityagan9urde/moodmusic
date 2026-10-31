@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 BG = "#1e1e24"
 OK, WARN, ERR = QColor("#3ddc84"), QColor("#f5a623"), QColor("#e5484d")
 CHOOSE_DEVICE = "Choose a Spotify device"
+AUTH_EXPIRED = "Spotify login expired. Please log in again"
 
 BUTTON_CSS = """
 QPushButton { background:#2d2d36; color:#eee; border:none; border-radius:9px; padding:3px 9px;
@@ -119,6 +120,18 @@ class ModeToggle(QWidget):
         lift = self._engine.settings.mode == Mode.LIFT.value
         self.lift_btn.setChecked(lift)
         self.match_btn.setChecked(not lift)
+
+
+class LoginButton(QPushButton):
+    """'Log in to Spotify' button, shown only while the engine says the login expired."""
+    def __init__(self, engine, on_click: Callable[[], None], parent=None) -> None:
+        super().__init__("Log in to Spotify", parent)
+        self._engine = engine
+        self.setVisible(False)
+        self.clicked.connect(lambda _=False: on_click())
+
+    def refresh(self) -> None:
+        self.setVisible(self._engine.status.message == AUTH_EXPIRED)
 
 
 class DeviceButton(QPushButton):

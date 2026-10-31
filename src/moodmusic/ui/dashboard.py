@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar, QPushButton, Q
                                QWidget)
 
 from moodmusic.config import Settings, save_settings
-from moodmusic.ui.common import (BUTTON_CSS, ArtLabel, DeviceButton, ModeToggle, StatusDot)
+from moodmusic.ui.common import (BUTTON_CSS, ArtLabel, DeviceButton,
+                                 LoginButton, ModeToggle, StatusDot)
 from moodmusic.ui.mood_picker import MoodPicker
 
 EMOTIONS = ("anger", "contempt", "disgust", "fear", "happiness", "neutral", "sadness", "surprise")
@@ -57,6 +58,7 @@ class Dashboard(QWidget):
     switch_view = Signal(str)
     settings_requested = Signal()
     review_requested = Signal()
+    login_requested = Signal()
 
     def __init__(self, engine, worker, clock: Callable[[], float] = time.monotonic,
                  save: Callable[[Settings], None] = save_settings) -> None:
@@ -110,6 +112,7 @@ class Dashboard(QWidget):
         self.wrong_btn.clicked.connect(self._wrong_vibe)
         self.mode_toggle = ModeToggle(engine, save)
         self.device_btn = DeviceButton(engine)
+        self.login_btn = LoginButton(engine, self.login_requested.emit)
         self.mood_label = QLabel("")
         modes = QHBoxLayout()
         modes.addWidget(self.mood_label, 1)
@@ -121,6 +124,7 @@ class Dashboard(QWidget):
         right.addLayout(playing)
         right.addWidget(self.wrong_btn)
         right.addWidget(self.device_btn)
+        right.addWidget(self.login_btn)
         right.addLayout(modes)
         right.addStretch(1)
 
@@ -185,6 +189,7 @@ class Dashboard(QWidget):
         self.chart.set_history(self._engine.history)
         self.mode_toggle.refresh()
         self.device_btn.refresh()
+        self.login_btn.refresh()
 
     def _wrong_vibe(self) -> None:
         group = MoodPicker.ask(self, "This song fits…")

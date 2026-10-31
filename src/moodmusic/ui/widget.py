@@ -9,13 +9,14 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
 from moodmusic.config import Settings, save_settings
-from moodmusic.ui.common import (BG, BUTTON_CSS, ArtLabel, DeviceButton, ModeToggle,
-                                 StatusDot, steady_text)
+from moodmusic.ui.common import (BG, BUTTON_CSS, ArtLabel, DeviceButton,
+                                 LoginButton, ModeToggle, StatusDot, steady_text)
 from moodmusic.ui.mood_picker import MoodPicker
 
 
 class MoodWidget(QWidget):
     switch_view = Signal(str)
+    login_requested = Signal()
 
     def __init__(self, engine, worker, clock: Callable[[], float] = time.monotonic,
                  save: Callable[[Settings], None] = save_settings) -> None:
@@ -69,12 +70,13 @@ class MoodWidget(QWidget):
         self.wrong_btn = QPushButton("Wrong vibe")
         self.advanced_btn = QPushButton("Advanced ⤢")
         self.device_btn = DeviceButton(engine)
+        self.login_btn = LoginButton(engine, self.login_requested.emit)
         self.feel_btn.clicked.connect(self._not_how_i_feel)
         self.wrong_btn.clicked.connect(self._wrong_vibe)
         self.advanced_btn.clicked.connect(lambda: self.switch_view.emit("advanced"))
         actions = QHBoxLayout()
         actions.setSpacing(4)
-        for b in (self.feel_btn, self.wrong_btn, self.device_btn):
+        for b in (self.feel_btn, self.wrong_btn, self.device_btn, self.login_btn):
             actions.addWidget(b)
         actions.addStretch(1)
         actions.addWidget(self.advanced_btn)
@@ -119,6 +121,7 @@ class MoodWidget(QWidget):
         self.wrong_btn.setEnabled(pick is not None)
         self.mode_toggle.refresh()
         self.device_btn.refresh()
+        self.login_btn.refresh()
 
     # ---- actions ----------------------------------------------------------
     def _not_how_i_feel(self) -> None:

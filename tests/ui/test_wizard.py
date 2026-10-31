@@ -45,7 +45,7 @@ def make(qtbot, monkeypatch, bundled=None, login_fn=None, validate_fn=None):
         return w
 
     s = Settings()
-    w = wiz.SetupWizard(s, login_fn=login_fn or (lambda cid: None), worker_factory=factory,
+    w = wiz.SetupWizard(s, login_fn=login_fn or (lambda cid, cancel=None: None), worker_factory=factory,
                         cameras_fn=lambda: [0, 1], playlists_fn=lambda: [("p1", "Mix", 3)],
                         validate_fn=validate_fn or (lambda key: None))
     qtbot.addWidget(w)
@@ -63,7 +63,7 @@ def test_spotify_page_blocks_next_until_logged_in(qtbot, monkeypatch):
 
 
 def test_not_premium_shows_message(qtbot, monkeypatch):
-    def login(cid):
+    def login(cid, cancel=None):
         raise NotPremium("x")
     w, s, _, _ = make(qtbot, monkeypatch, login_fn=login)
     page = w.page(wiz.PAGE_SPOTIFY)
@@ -77,7 +77,7 @@ def test_not_premium_shows_message(qtbot, monkeypatch):
 def test_spotify_error_allows_retry(qtbot, monkeypatch):
     calls = []
 
-    def login(cid):
+    def login(cid, cancel=None):
         calls.append(cid)
         if len(calls) == 1:
             raise SpotifyError("boom")
@@ -191,7 +191,7 @@ def test_reject_while_login_blocked_ignores_late_result(qtbot, monkeypatch):
     from moodmusic.ui import async_util
     gate = threading.Event()
 
-    def login(cid):
+    def login(cid, cancel=None):
         gate.wait(5)
     w, s, _, _ = make(qtbot, monkeypatch, login_fn=login)
     page = w.page(wiz.PAGE_SPOTIFY)
@@ -227,3 +227,42 @@ def test_accept_without_selection_does_nothing(qtbot, monkeypatch):
     w, s, saved, _ = make(qtbot, monkeypatch)
     w.accept()
     assert not s.setup_complete and saved == []
+
+
+def test_login_timeout_message_and_retry(qtbot, monkeypatch):
+    from moodmusic.spotify.auth import LoginTimeout
+    calls = []
+
+    def login(cid, cancel=None):
+        calls.append(cid)
+        if len(calls) == 1:
+            raise LoginTimeout("x")
+    w, *_ = make(qtbot, monkeypatch, login_fn=login)
+    page = w.page(wiz.PAGE_SPOTIFY)
+    page.client_edit.setText("abc")
+    page.start_login()
+    qtbot.waitUntil(lambda: "Didn't hear back" in page.status.text(), timeout=3000)
+    assert page.status.text() == ("Didn't hear back from Spotify. Check the redirect URI in "
+                                  "your Spotify app settings, then try again.")
+    assert page.login_button.isEnabled() and page.cancel_button.isHidden()
+    page.start_login()
+    qtbot.waitUntil(page.isComplete, timeout=3000)
+
+
+def test_closing_wizard_cancels_waiting_login(qtbot, monkeypatch):
+    from moodmusic.ui import async_util
+    cancels = []
+
+    def login(cid, cancel=None):
+        cancels.append(cancel)
+        cancel.wait(5)
+    w, s, _, _ = make(qtbot, monkeypatch, login_fn=login)
+    page = w.page(wiz.PAGE_SPOTIFY)
+    page.client_edit.setText("abc")
+    page.start_login()
+    assert not page.cancel_button.isHidden()
+    qtbot.waitUntil(lambda: bool(cancels), timeout=3000)
+    w.reject()
+    assert cancels[0].is_set()
+    qtbot.waitUntil(lambda: not async_util._LIVE, timeout=3000)
+    assert not page.isComplete()

@@ -20,7 +20,7 @@ def make_icon() -> QIcon:
 
 
 class Tray:
-    def __init__(self, engine, views, on_settings, on_quit) -> None:
+    def __init__(self, engine, views, on_settings, on_quit, on_login=None) -> None:
         self.icon = QSystemTrayIcon(make_icon())
         self.icon.setToolTip("Mood Music")
         self.menu = QMenu()
@@ -30,6 +30,7 @@ class Tray:
         self.menu.addAction(self.pause_action)
         self.toggle_view_action = self.menu.addAction("")
         self.settings_action = self.menu.addAction("Settings")
+        self.login_action = self.menu.addAction("Log in to Spotify")
         self.menu.addSeparator()
         self.quit_action = self.menu.addAction("Quit")
         self.icon.setContextMenu(self.menu)
@@ -39,6 +40,10 @@ class Tray:
         self.pause_action.toggled.connect(lambda paused: engine.set_enabled(not paused))
         self.toggle_view_action.triggered.connect(views.toggle)
         self.settings_action.triggered.connect(on_settings)
+        if on_login is not None:
+            self.login_action.triggered.connect(on_login)
+        else:
+            self.login_action.setVisible(False)
         self.quit_action.triggered.connect(on_quit)
         self.icon.activated.connect(self._activated)
         self.menu.aboutToShow.connect(self.update_view_label)

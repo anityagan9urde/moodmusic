@@ -10,7 +10,7 @@ import requests
 import spotipy
 from spotipy.exceptions import SpotifyException, SpotifyOauthError
 
-from moodmusic.spotify.auth import KeyringCacheHandler, make_auth_manager
+from moodmusic.spotify.auth import TOKEN_LOCK, KeyringCacheHandler, LoginRequired, make_auth_manager
 
 log = logging.getLogger(__name__)
 
@@ -121,7 +121,8 @@ class SpotifyService:
         try:
             handler = getattr(getattr(self.sp, "auth_manager", None), "cache_handler", None)
             if isinstance(handler, KeyringCacheHandler):
-                handler.clear()
+                with TOKEN_LOCK:
+                    handler.clear()
         except Exception as e:  # never let cleanup mask the real error
             log.warning("Could not clear cached token: %s", type(e).__name__)
 
@@ -130,6 +131,8 @@ class SpotifyService:
         while True:
             try:
                 return fn(*args, **kwargs)
+            except LoginRequired:  # runtime auth manager already decided about the cache
+                raise AuthRequired("Spotify login expired. Please log in again") from None
             except SpotifyOauthError:  # includes SpotifyStateError
                 self._clear_token()
                 raise AuthRequired("Spotify login expired. Please log in again") from None
