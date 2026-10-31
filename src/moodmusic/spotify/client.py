@@ -8,9 +8,9 @@ from dataclasses import dataclass
 
 import requests
 import spotipy
-from spotipy.exceptions import SpotifyException
+from spotipy.exceptions import SpotifyException, SpotifyOauthError
 
-from moodmusic.spotify.auth import make_auth_manager
+from moodmusic.spotify.auth import KeyringCacheHandler, make_auth_manager
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +19,10 @@ MAX_RETRY_AFTER_S = 10
 
 class SpotifyError(Exception):
     """Generic Spotify failure. Messages never contain tokens."""
+
+
+class AuthRequired(SpotifyError):
+    """Login expired/revoked/denied; the user must log in again."""
 
 
 class NotPremium(SpotifyError):
@@ -50,10 +54,17 @@ class Device:
     is_active: bool
 
 
-def make_spotify(client_id: str) -> spotipy.Spotify:
-    """Spotify client with spotipy's own retries disabled; _call owns retry policy."""
+def make_spotify(client_id: str, auth_manager=None) -> spotipy.Spotify:
+    """Spotify client with all spotipy-level retries disabled; _call owns retry policy.
+
+    A plain requests.Session is passed so spotipy's urllib3 Retry (whose default
+    status_forcelist turns 5xx into a headerless 429) is never installed.
+    """
+    # Bearer tokens appear in spotipy's DEBUG logs; never allow that.
+    logging.getLogger("spotipy").setLevel(logging.WARNING)
     return spotipy.Spotify(
-        auth_manager=make_auth_manager(client_id),
+        auth_manager=auth_manager or make_auth_manager(client_id),
+        requests_session=requests.Session(),
         requests_timeout=10,
         retries=0,
         status_retries=0,
@@ -88,12 +99,23 @@ class SpotifyService:
             return SpotifyUnavailable(f"Spotify is unavailable (HTTP {status})")
         return SpotifyError(f"Spotify request failed (HTTP {status})")
 
+    def _clear_token(self) -> None:
+        try:
+            handler = getattr(getattr(self.sp, "auth_manager", None), "cache_handler", None)
+            if isinstance(handler, KeyringCacheHandler):
+                handler.clear()
+        except Exception as e:  # never let cleanup mask the real error
+            log.warning("Could not clear cached token: %s", type(e).__name__)
+
     def _call(self, fn, *args, **kwargs):
         retried = False
         while True:
             try:
                 return fn(*args, **kwargs)
-            except (requests.ConnectionError, requests.Timeout) as e:
+            except SpotifyOauthError:  # includes SpotifyStateError
+                self._clear_token()
+                raise AuthRequired("Spotify login expired. Please log in again") from None
+            except requests.RequestException as e:
                 raise SpotifyUnavailable("Cannot reach Spotify") from e
             except SpotifyException as e:
                 if not retried and e.http_status == 401:

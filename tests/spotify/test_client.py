@@ -304,3 +304,90 @@ def test_make_auth_manager_config(mem_keyring):
     assert "user-read-playback-state" in am.scope and "user-read-private" in am.scope
     assert isinstance(am.cache_handler, KeyringCacheHandler)
     assert SCOPES.count(" ") == 6
+
+
+# ---- auth failures ---------------------------------------------------------
+def test_oauth_errors_map_to_auth_required_and_clear_token(mem_keyring):
+    from spotipy.exceptions import SpotifyOauthError, SpotifyStateError
+
+    from moodmusic.spotify.client import AuthRequired
+    for exc in (SpotifyOauthError("refresh token abc123 revoked"), SpotifyStateError("a", "b")):
+        mem_keyring.store[("moodmusic", "spotify_token")] = "{}"
+
+        class Sp:
+            auth_manager = type("AM", (), {"cache_handler": KeyringCacheHandler()})()
+
+            def devices(self):
+                raise exc
+        with pytest.raises(AuthRequired) as e:
+            svc(Sp()).devices()
+        assert "abc123" not in str(e.value)
+        assert ("moodmusic", "spotify_token") not in mem_keyring.store
+
+
+def test_other_request_exceptions_are_unavailable():
+    class Sp:
+        def devices(self):
+            raise requests.exceptions.ChunkedEncodingError("cut")
+    with pytest.raises(SpotifyUnavailable):
+        svc(Sp()).devices()
+
+
+# ---- real spotipy against a local stub server ------------------------------
+@pytest.fixture
+def stub_server():
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    state = {"responses": [], "hits": 0}
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            state["hits"] += 1
+            code, headers, body = state["responses"].pop(0)
+            self.send_response(code)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    state["url"] = f"http://127.0.0.1:{srv.server_address[1]}/"
+    yield state
+    srv.shutdown()
+    srv.server_close()
+
+
+class StaticAuth:
+    def get_access_token(self, as_dict=False):
+        return "static-token"
+
+
+def real_service(state, sleeps):
+    from moodmusic.spotify.client import make_spotify
+    sp = make_spotify("cid", auth_manager=StaticAuth())
+    sp.prefix = state["url"]
+    return SpotifyService(sp, sleep=sleeps.append)
+
+
+def test_real_spotipy_503_is_unavailable(stub_server):
+    stub_server["responses"] = [(503, {"Retry-After": "7"}, b"{}")]
+    sleeps = []
+    with pytest.raises(SpotifyUnavailable):
+        real_service(stub_server, sleeps).devices()
+    assert sleeps == [] and stub_server["hits"] == 1
+
+
+def test_real_spotipy_429_honours_retry_after(stub_server):
+    stub_server["responses"] = [(429, {"Retry-After": "3"}, b"{}"),
+                                (200, {"Content-Type": "application/json"},
+                                 b'{"devices": []}')]
+    sleeps = []
+    assert real_service(stub_server, sleeps).devices() == []
+    assert sleeps == [3] and stub_server["hits"] == 2
