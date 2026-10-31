@@ -33,6 +33,7 @@ class Features:
     long_closures_90s: int = 0
     yawns_240s: int = 0
     head_droop_deg_240s: float = 0.0  # mean pitch; negative = head down
+    head_tilt_10s: float = 0.0  # mean |roll|, degrees
     smile_10s: float = 0.0
     cheek_squint_10s: float = 0.0
     brow_down_30s: float = 0.0
@@ -170,6 +171,7 @@ class FeatureTracker:
             long_closures_90s=sum(1 for e in self._long_closures if e > t - 90),
             yawns_240s=len(self._yawns),
             head_droop_deg_240s=_mean([s.head_pitch for s in face240]),
+            head_tilt_10s=_mean([abs(s.head_roll) for s in face10]),
             smile_10s=_mean([s.smile for s in face10]),
             cheek_squint_10s=_mean([s.cheek_squint for s in face10]),
             brow_down_30s=_mean([s.brow_down for s in sig30]),

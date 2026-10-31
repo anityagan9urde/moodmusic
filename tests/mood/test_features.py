@@ -129,3 +129,9 @@ def test_old_frames_drop_out_of_windows():
 def test_empty_tracker_features():
     f = FeatureTracker().features(0.0)
     assert f.face_ratio_10s == 0 and f.observed_s == 0 and f.emotion_30s == {}
+
+
+def test_head_tilt_is_mean_absolute_roll():
+    tr = FeatureTracker()
+    t = feed(tr, 0, 10, lambda t: sig(head_roll=-8 if (t % 2) < 1 else 8))
+    assert tr.features(t).head_tilt_10s == pytest.approx(8)
