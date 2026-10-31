@@ -26,10 +26,15 @@ DEFAULTS: dict[str, float] = {
     "head_droop_deg_240s": -5.0,
     "brow_inner_up_10s": 0.05,
     "head_tilt_10s": 2.0,
+    # The emotion model reads some resting faces as clearly negative (one user: -0.57),
+    # so valence and arousal are judged against the person's own resting values.
+    "valence_30s": 0.0,
+    "arousal_30s": 0.0,
 }
 KEYS = tuple(DEFAULTS)
 REST_KEYS = ("brow_down_30s", "mouth_press_30s", "smile_10s", "gaze_on_ratio_30s",
-             "head_droop_deg_240s", "brow_inner_up_10s", "head_tilt_10s")
+             "head_droop_deg_240s", "brow_inner_up_10s", "head_tilt_10s",
+             "valence_30s", "arousal_30s")
 SAMPLE_EVERY_S = 15
 # ~8 h of 15 s samples: slow enough that an hour of tiredness doesn't become "normal",
 # and samples are only taken while no other state is active (see update(sample=...)).

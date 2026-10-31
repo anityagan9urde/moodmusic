@@ -186,3 +186,43 @@ def test_heavy_eyelids_alone_are_not_sleepy():
     assert state_of(f)[0] != F.SLEEPY
     nodding = replace(f, head_droop_deg_240s=-15)
     assert state_of(nodding)[0] == F.SLEEPY
+
+
+# --- Tuned from the user's recording (signals-20261101): a neutral face reads valence ~ -0.57,
+# arousal ~ -0.13, brow_down ~ 0.04, brow_inner_up ~ 0.01; cheek_squint never fires.
+def _user_rest():
+    b = WarmBaselines()
+    b.calibrate_rest(replace(AT_DESK, valence_30s=-0.57, arousal_30s=-0.13, brow_down_30s=0.036,
+                             brow_inner_up_10s=0.013, smile_10s=0.007, mouth_press_30s=0.012))
+    return b
+
+
+def test_resting_negative_valence_is_not_sad():
+    f = replace(AT_DESK, valence_30s=-0.6, arousal_30s=-0.15, gaze_on_ratio_30s=0.5)
+    assert score_states(f, _user_rest())[F.SAD].value < 0.6
+
+
+def test_resting_arousal_is_not_low_energy():
+    f = replace(AT_DESK, valence_30s=-1.1, arousal_30s=-0.13, gaze_on_ratio_30s=0.5)
+    sad = score_states(f, _user_rest())[F.SAD]
+    assert "looking down" in sad.reasons and "low energy" not in sad.reasons
+
+
+def test_real_smile_is_confident_happy_without_cheek_squint():
+    f = replace(AT_DESK, smile_10s=0.79, cheek_squint_10s=0.0, valence_30s=0.47)
+    assert score_states(f, _user_rest())[F.HAPPY].value >= 0.9
+
+
+def test_talking_brow_is_not_a_tense_brow():
+    # talking lifts brow_down to ~0.16; with a worried brow and restlessness that alone
+    # must not make two tension cues.
+    f = replace(AT_DESK, brow_down_30s=0.157, brow_inner_up_10s=0.6, head_motion_30s=30.0,
+                gaze_on_ratio_30s=0.5)
+    assert score_states(f, _user_rest())[F.STRESSED].value < 0.6
+
+
+def test_looking_away_inner_brow_is_not_worried():
+    # turning the head lifts brow_inner_up to ~0.16-0.32 without any worry
+    f = replace(AT_DESK, brow_down_30s=0.4, brow_inner_up_10s=0.32, head_motion_30s=30.0,
+                gaze_on_ratio_30s=0.5)
+    assert score_states(f, _user_rest())[F.STRESSED].value < 0.6

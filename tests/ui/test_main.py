@@ -277,3 +277,13 @@ def test_thread_excepthook_logs(caplog):
         assert "Unhandled exception in thread tboom" in caplog.text
     finally:
         sys.excepthook, threading.excepthook = old_sys, old_thr
+
+
+def test_needs_calibration_when_screen_centre_missing():
+    from moodmusic.mood.baselines import PersonalBaselines
+    from moodmusic.ui.main import needs_calibration
+    b = PersonalBaselines()
+    assert needs_calibration(None, b)
+    assert needs_calibration(object(), b)  # upgraded install: old baseline, no screen centre
+    b.screen_center = (0.0, 0.1, 0.0)
+    assert not needs_calibration(object(), b)

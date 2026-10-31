@@ -116,3 +116,14 @@ def test_screen_center_roundtrip(tmp_path):
     b.screen_center = (0.1, -0.35, 3.0)
     save_baselines(b, tmp_path / "c.json")
     assert load_baselines(tmp_path / "c.json").screen_center == pytest.approx((0.1, -0.35, 3.0))
+
+
+def test_rest_captures_valence_and_arousal():
+    from dataclasses import replace as _r
+    from moodmusic.mood.baselines import DEFAULTS, REST_KEYS, PersonalBaselines
+    from moodmusic.mood.features import Features
+    assert DEFAULTS["valence_30s"] == 0.0 and DEFAULTS["arousal_30s"] == 0.0
+    assert "valence_30s" in REST_KEYS and "arousal_30s" in REST_KEYS
+    b = PersonalBaselines()
+    b.calibrate_rest(_r(Features(), valence_30s=-0.57, arousal_30s=-0.13))
+    assert b.get("valence_30s") == -0.57 and b.get("arousal_30s") == -0.13

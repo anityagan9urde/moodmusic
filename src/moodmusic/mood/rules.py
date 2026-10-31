@@ -56,6 +56,16 @@ def _mouth_quiet(f: Features) -> float:
     return 1 - ramp(f.mouth_motion_10s, 0.01, 0.05)
 
 
+def _dv(f: Features, b: PersonalBaselines) -> float:
+    """Valence relative to the person's resting face."""
+    return f.valence_30s - b.get("valence_30s")
+
+
+def _da(f: Features, b: PersonalBaselines) -> float:
+    """Arousal relative to the person's resting face."""
+    return f.arousal_30s - b.get("arousal_30s")
+
+
 def _focus_like(f: Features, b: PersonalBaselines) -> float:
     """Eyes on the screen with a steady head: working, whatever the face is doing."""
     hm = b.get("head_motion_30s")
@@ -79,7 +89,7 @@ def _deep_thought(f: Features, b: PersonalBaselines) -> Score:
     c = _Cues()
     away = c.add(ramp(f.gaze_away_hold_s, 8, 30), f"looking away {int(f.gaze_away_hold_s)} s")
     c.add(ramp(f.stillness_s, 5, 20), "very still")
-    c.add(1 - ramp(abs(f.valence_30s), 0.3, 0.5), "calm face")
+    c.add(1 - ramp(abs(_dv(f, b)), 0.3, 0.5), "calm face")
     c.add(_mouth_quiet(f), "quiet")
     present = ramp(f.face_ratio_10s, 0.8, 0.9)
     return c.score(away * present)
@@ -93,7 +103,7 @@ def _love(f: Features, b: PersonalBaselines) -> Score:
     c.add(ramp(f.glance_away_count_30s, 0, 2), "shy glances away")
     bt = b.get("head_tilt_10s")
     c.add(ramp(f.head_tilt_10s, bt + 1, bt + 6), "head tilted")
-    c.add(ramp(f.valence_30s, 0.0, 0.3), "warm expression")
+    c.add(ramp(_dv(f, b), 0.0, 0.3), "warm expression")
     quiet = c.add(_mouth_quiet(f), "quiet")  # glancing away while talking is just a call
     return c.score(soft * quiet)
 
@@ -102,8 +112,8 @@ def _happy(f: Features, b: PersonalBaselines) -> Score:
     c = _Cues()
     bs = b.get("smile_10s")
     smile = c.add(ramp(f.smile_10s, bs + 0.25, bs + 0.45), "smiling")
-    c.add(ramp(f.cheek_squint_10s, 0.15, 0.3), "eyes smiling too")
-    c.add(ramp(f.valence_30s, 0.1, 0.3), "positive")
+    # (cheekSquint never fires on a real webcam smile, so it is not a cue)
+    c.add(ramp(_dv(f, b), 0.1, 0.3), "positive")
     return c.score(smile)
 
 
@@ -111,9 +121,9 @@ def _excited(f: Features, b: PersonalBaselines) -> Score:
     c = _Cues()
     bs, bi = b.get("smile_10s"), b.get("brow_inner_up_10s")
     big = max(ramp(f.smile_10s, bs + 0.5, bs + 0.7),
-              ramp(f.brow_inner_up_10s, bi + 0.15, bi + 0.35))
+              ramp(f.brow_inner_up_10s, bi + 0.3, bi + 0.5))  # head turns lift it ~0.15-0.3
     c.add(big, "big smile / raised brows")
-    c.add(ramp(f.arousal_30s, 0.2, 0.4), "high energy")
+    c.add(ramp(_da(f, b), 0.2, 0.4), "high energy")
     hm = b.get("head_motion_30s")
     c.add(ramp(f.head_motion_30s, hm, hm * 2), "lively")
     return c.score(big)
@@ -127,7 +137,7 @@ def _tired(f: Features, b: PersonalBaselines, k: float) -> Score:
     heavy = c.add(ramp(closed_ratio, 2 * k, 2 * k + 2), "heavy eyelids")
     c.add(ramp(b.get("head_droop_deg_240s") - f.head_droop_deg_240s, 5 * k, 5 * k + 5),
           "head drooping")
-    c.add(1 - ramp(f.arousal_30s, -0.2, 0.0), "low energy")
+    c.add(1 - ramp(_da(f, b), -0.2, 0.0), "low energy")
     return c.score(max(slow, heavy))
 
 
@@ -145,17 +155,19 @@ def _sleepy(f: Features, b: PersonalBaselines, k: float) -> Score:
 
 def _stressed(f: Features, b: PersonalBaselines, k: float) -> Score:
     c = _Cues()
-    brow = c.add(ramp(f.brow_down_30s - b.get("brow_down_30s"), 0.05 * k, 0.15 * k),
+    # talking lifts brow_down ~0.12 and smiling ~0.2 above rest; a real frown ~0.28
+    brow = c.add(ramp(f.brow_down_30s - b.get("brow_down_30s"), 0.15 * k, 0.25 * k),
                  "tense brow")
     press = c.add(ramp(f.mouth_press_30s - b.get("mouth_press_30s"), 0.05 * k, 0.15 * k),
                   "pressed lips")
     bi = b.get("brow_inner_up_10s")
-    worried = c.add(ramp(f.brow_inner_up_10s, bi + 0.15 * k, bi + 0.35 * k), "worried brow")
+    # looking away lifts brow_inner_up up to ~0.3 above rest with no worry at all
+    worried = c.add(ramp(f.brow_inner_up_10s, bi + 0.35 * k, bi + 0.5 * k), "worried brow")
     hm = b.get("head_motion_30s")
     restless = ramp(f.head_motion_30s / max(hm, 1e-6), 1.5 * k, 2.5 * k)
     # A concentration frown reads as mild "anger" to the emotion model, so while the user is
     # clearly working (eyes on screen, head steady) only real restlessness counts.
-    uneasy = ramp(-f.valence_30s, 0.2, 0.4) * (1 - _focus_like(f, b))
+    uneasy = ramp(-_dv(f, b), 0.2, 0.4) * (1 - _focus_like(f, b))
     unsettled = c.add(max(restless, uneasy), "restless / uneasy")
     tension = sum(x >= REASON_MIN for x in (brow, press, worried))
     gate = 1.0 if tension >= 2 and unsettled >= REASON_MIN else 0.0
@@ -176,8 +188,8 @@ def _bored(f: Features, b: PersonalBaselines, k: float) -> Score:
 
 def _sad(f: Features, b: PersonalBaselines) -> Score:
     c = _Cues()
-    low = c.add(ramp(-f.valence_30s, 0.3, 0.5), "looking down")
-    c.add(1 - ramp(f.arousal_30s, -0.1, 0.1), "low energy")
+    low = c.add(ramp(-_dv(f, b), 0.3, 0.5), "looking down")
+    c.add(1 - ramp(_da(f, b), -0.2, 0.0), "low energy")
     return c.score(low)
 
 

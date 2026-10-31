@@ -288,6 +288,11 @@ def start_update_check(on_found: Callable[[str], None], current: str | None = No
     return relay
 
 
+def needs_calibration(baseline, baselines) -> bool:
+    """Calibrate on first run, and once after upgrading to an install with no screen centre."""
+    return baseline is None or baselines.screen_center is None
+
+
 def run() -> int:
     from moodmusic.ui.dashboard import Dashboard
     from moodmusic.ui.tray import Tray, make_icon
@@ -385,7 +390,7 @@ def run() -> int:
     timer.start(2000)
     tray.show()
     worker.start()
-    if baseline is None:
+    if needs_calibration(baseline, baselines):
         worker.start_calibration()
         tray.message("Mood Music", "Calibrating: look at the camera for about 20 seconds.")
 
