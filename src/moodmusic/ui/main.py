@@ -325,7 +325,8 @@ def run() -> int:
 
     service = make_engine_service(settings.spotify_client_id)
     library = SongLibrary(data_dir() / "library.db")
-    selector = SongSelector(library, random.Random())
+    selector = SongSelector(library, random.Random(),
+                            cooldown_s=lambda: settings.no_repeat_hours * 3600)
     corrections = StateCorrections(data_dir() / "state_corrections.jsonl")
     state_tracker = StateTracker(HOLD_SECONDS.get(settings.sensitivity, HOLD_SECONDS["normal"]))
     baselines = load_baselines()

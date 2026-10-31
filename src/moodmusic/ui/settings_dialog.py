@@ -27,6 +27,8 @@ REACT_CHOICES = (
 )
 SWITCH_CHOICES = (("Switch now", "immediate"), ("Finish song", "wait"))
 STYLE_CHOICES = (("Match", Mode.MATCH.value), ("Lift", Mode.LIFT.value))
+NO_REPEAT_CHOICES = (("1 hour", 1), ("3 hours", 3), ("6 hours", 6), ("12 hours", 12),
+                     ("1 day", 24))
 AWAY_CHOICES = (("Never", 0), ("5 min", 5), ("10 min", 10), ("15 min", 15), ("30 min", 30),
                 ("1 hour", 60))
 
@@ -166,6 +168,16 @@ class SettingsDialog(QDialog):
         body.addWidget(_item("When your mood changes",
                              "Switch the song now, or let the current one finish first",
                              self.switch)[0])
+        self.no_repeat = QComboBox()
+        for label, hours in NO_REPEAT_CHOICES:
+            self.no_repeat.addItem(label, hours)
+        if self.no_repeat.findData(s.no_repeat_hours) < 0:
+            self.no_repeat.addItem(f"{s.no_repeat_hours} hours", s.no_repeat_hours)
+        self.no_repeat.setCurrentIndex(self.no_repeat.findData(s.no_repeat_hours))
+        self.no_repeat.currentIndexChanged.connect(lambda _i: self.save())
+        body.addWidget(_item("Don't repeat a song for",
+                             "If every song for a mood played recently, a neighbouring mood "
+                             "fills in", self.no_repeat)[0])
         self.music_style = Segmented(STYLE_CHOICES, s.mode)
         self.music_style.changed.connect(self._style_changed)
         body.addWidget(_item("Music style", "Match how you feel, or gently lift you up",
@@ -386,6 +398,8 @@ class SettingsDialog(QDialog):
         s.sensitivity = self.react.value() or s.sensitivity
         s.switch_mode = self.switch.value() or s.switch_mode
         s.mode = self.music_style.value() or s.mode
+        hours = self.no_repeat.currentData()
+        s.no_repeat_hours = hours if hours is not None else s.no_repeat_hours
         minutes = self.away.currentData()
         s.away_pause_minutes = minutes if minutes is not None else s.away_pause_minutes
         new_id = self.client_id.text().strip()

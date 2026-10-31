@@ -175,7 +175,7 @@ def test_lift_mode_steps_one_group_per_song(tmp_path):
     svc.pb = pb(q[0][0], progress=199000)
     eng.tick()
     nxt = svc.names("queue")[-1][0]
-    assert nxt in ("c1", "c2", "u1", "u2")
+    assert nxt not in (first, q[0][0])  # both Chill songs just played: no repeat
 
 
 def test_manual_song_backs_off(tmp_path):

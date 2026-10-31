@@ -107,3 +107,48 @@ def test_mark_played_records_history(tmp_path):
     s = sel(tmp_path, [mk("u1", MoodGroup.CHILL)])
     s.mark_played("u1", 1234.5)
     assert s.library.last_played() == {"u1": 1234.5}
+
+
+HOUR = 3600.0
+
+
+def test_cooldown_survives_restart(tmp_path):
+    # a new selector (app restart) on the same library still skips songs played recently
+    s = sel(tmp_path, [mk(f"u{i}", MoodGroup.CHILL) for i in range(3)])
+    for uri in ("u0", "u1"):
+        s.library.record_play(uri, 10 * HOUR)
+    fresh = SongSelector(s.library, random.Random(1))
+    for _ in range(5):
+        assert fresh.pick([MoodGroup.CHILL], state(), now=11 * HOUR).song.uri == "u2"
+
+
+def test_song_returns_after_cooldown(tmp_path):
+    s = sel(tmp_path, [mk("u0", MoodGroup.CHILL)])
+    s.library.record_play("u0", 0.0)
+    s.cooldown_s = lambda: 3 * HOUR
+    p = s.pick([MoodGroup.CHILL], state(), now=3 * HOUR + 1)
+    assert p.song.uri == "u0" and p.fell_back_from is None
+
+
+def test_borrows_neighbour_group_instead_of_repeating(tmp_path):
+    s = sel(tmp_path, [mk("f0", MoodGroup.FOCUS), mk("c0", MoodGroup.CHILL)])
+    s.library.record_play("f0", 10 * HOUR)
+    p = s.pick([MoodGroup.FOCUS], state(), now=10.5 * HOUR)
+    assert p.song.uri == "c0" and p.fell_back_from == MoodGroup.FOCUS
+    assert "Focus songs all played recently" in p.reason
+
+
+def test_everything_recent_picks_least_recent_in_target(tmp_path):
+    s = sel(tmp_path, [mk("f0", MoodGroup.FOCUS), mk("f1", MoodGroup.FOCUS)])
+    s.library.record_play("f0", 10 * HOUR)
+    s.library.record_play("f1", 9 * HOUR)
+    p = s.pick([MoodGroup.FOCUS], state(), now=10.5 * HOUR)
+    assert p.song.uri == "f1" and p.group == MoodGroup.FOCUS
+
+
+def test_fresh_pick_respects_cooldown(tmp_path):
+    s = sel(tmp_path, [mk("a", MoodGroup.UPBEAT), mk("b", MoodGroup.UPBEAT)])
+    s.library.record_play("a", 1 * HOUR)
+    s.library.record_play("b", 10 * HOUR)
+    for _ in range(5):
+        assert s.pick([MoodGroup.UPBEAT], state(), fresh=True, now=11 * HOUR).song.uri == "a"

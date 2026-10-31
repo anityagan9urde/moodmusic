@@ -5,7 +5,7 @@ import logging
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
@@ -109,8 +109,10 @@ class SettingsChips(QWidget):
         self.switch_chip = QPushButton()
         self.react_chip = QPushButton()
         self.away_chip = QPushButton()
+        self.repeat_chip = QPushButton()
         self.source_chip = QPushButton()
-        self.chips = [self.switch_chip, self.react_chip, self.away_chip, self.source_chip]
+        self.chips = [self.switch_chip, self.react_chip, self.repeat_chip, self.away_chip,
+                      self.source_chip]
         for chip in self.chips:
             chip.setObjectName("chip")
             chip.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -139,6 +141,7 @@ class SettingsChips(QWidget):
                                     else "finish song"))
         hold = HOLD_SECONDS.get(s.sensitivity, HOLD_SECONDS["normal"])
         self.react_chip.setText(f"Reacts after: {hold} s")
+        self.repeat_chip.setText(f"No repeats for: {s.no_repeat_hours} h")
         self.away_chip.setText("Away pause: "
                                + (f"{s.away_pause_minutes} min" if s.away_pause_minutes
                                   else "off"))
@@ -159,7 +162,6 @@ class Dashboard(QWidget):
         self._engine, self._worker, self._clock = engine, worker, clock
         self._mood = None
         self.setWindowTitle("Mood Music")
-        self.resize(760, 640)
         self.setStyleSheet(BUTTON_CSS + CSS)
 
         # -- your state ------------------------------------------------------
@@ -300,6 +302,7 @@ class Dashboard(QWidget):
         worker.scores_ready.connect(self.state_bars.set_scores)
         worker.calibration_done.connect(self._on_calibrated)
         self.refresh()
+        self.resize(780, self.sizeHint().height())
 
     # ---- worker inputs -------------------------------------------------------
     def _on_reading(self, reading) -> None:
@@ -334,8 +337,13 @@ class Dashboard(QWidget):
 
     def _fold(self, shown: bool) -> None:
         self.testing.setVisible(shown)
+        QTimer.singleShot(0, self._fit_height)
         self.testing_toggle.setText(("▾ Hide" if shown else "▸ Show")
                                     + " camera, face signals and emotions (testing)")
+
+    def _fit_height(self) -> None:
+        """Grow for the testing section, and shrink back when it folds away."""
+        self.resize(self.width(), self.sizeHint().height())
 
     # ---- engine state ----------------------------------------------------------
     def refresh(self) -> None:

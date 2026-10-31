@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import random
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from moodmusic.mood.groups import MoodGroup, nearest_groups
 from moodmusic.music.library import Song, SongLibrary
 
 FRESH_FRACTION = 0.25  # Fresh picks come from the least recently played quarter
+DEFAULT_COOLDOWN_S = 3 * 3600  # a played song stays out of rotation this long
 
 
 @dataclass
@@ -21,9 +23,11 @@ class Pick:
 
 
 class SongSelector:
-    def __init__(self, library: SongLibrary, rng: random.Random):
+    def __init__(self, library: SongLibrary, rng: random.Random,
+                 cooldown_s: Callable[[], float] = lambda: DEFAULT_COOLDOWN_S):
         self.library = library
         self._rng = rng
+        self.cooldown_s = cooldown_s  # read on every pick, so a settings change applies now
         self._recent: dict[MoodGroup, deque[str]] = {}
 
     def mark_played(self, uri: str, now: float | None = None) -> None:
@@ -44,25 +48,45 @@ class SongSelector:
         `fresh` pools every song in `groups` and picks among the least recently played.
         """
         groups = list(groups)
+        last = self.library.last_played()
+        cutoff = now - self.cooldown_s() if now else None
+
+        def rested(songs: list[Song]) -> list[Song]:
+            if cutoff is None:
+                return songs
+            return [s for s in songs if last.get(s.uri, float("-inf")) <= cutoff]
+
         if fresh:
             pool = [s for g in groups for s in self.library.songs(g)]
             if pool:
-                song = self._choose_fresh(pool)
+                song = self._choose_fresh(rested(pool) or pool, last)
                 return Pick(song, song.group, self._reason(song, song.group, mood, None, True),
                             None, groups)
         target = groups[0]
         order = groups + [g for g in nearest_groups(target) if g not in groups]
+        target_had_songs = False
         for group in order:
             songs = self.library.songs(group)
-            if not songs:
+            if group == target and songs:
+                target_had_songs = True
+            available = rested(songs)
+            if not available:
                 continue
-            song = self._choose(group, songs)
+            song = self._choose(group, available)
             fell = target if group not in groups else None
-            return Pick(song, group, self._reason(song, group, mood, fell), fell, groups)
+            return Pick(song, group, self._reason(song, group, mood, fell,
+                                                  cooled=fell is not None and target_had_songs),
+                        fell, groups)
+        # Everything nearby played recently: the song heard longest ago in the best group.
+        for group in order:
+            songs = self.library.songs(group)
+            if songs:
+                song = min(songs, key=lambda x: last.get(x.uri, float("-inf")))
+                fell = target if group not in groups else None
+                return Pick(song, group, self._reason(song, group, mood, fell), fell, groups)
         return None
 
-    def _choose_fresh(self, pool: list[Song]) -> Song:
-        last = self.library.last_played()
+    def _choose_fresh(self, pool: list[Song], last: dict[str, float]) -> Song:
         ranked = sorted(pool, key=lambda s: last.get(s.uri, float("-inf")))
         never = [s for s in ranked if s.uri not in last]
         candidates = never or ranked[:max(1, int(len(ranked) * FRESH_FRACTION))]
@@ -84,7 +108,8 @@ class SongSelector:
         return self._rng.choice(songs)
 
     def _reason(self, song: Song, group: MoodGroup, mood,
-                fell_back_from: MoodGroup | None, fresh: bool = False) -> str:
+                fell_back_from: MoodGroup | None, fresh: bool = False,
+                cooled: bool = False) -> str:
         text = f"{group.label}: you seem {_mood_label(mood).lower()}"
         if fresh:
             text += "; something you haven't heard in a while"
@@ -95,7 +120,8 @@ class SongSelector:
         elif song.tags:
             text += "; tagged " + ", ".join(song.tags[:2])
         if fell_back_from is not None:
-            text += f" (no {fell_back_from.label} songs yet)"
+            text += (f" (your {fell_back_from.label} songs all played recently)" if cooled
+                     else f" (no {fell_back_from.label} songs yet)")
         return text
 
 

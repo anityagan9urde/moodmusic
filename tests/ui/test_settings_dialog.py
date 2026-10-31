@@ -179,3 +179,11 @@ def test_done_closes(qtbot, monkeypatch):
     d.show()
     d.done_button.click()
     assert not d.isVisible()
+
+
+def test_no_repeat_window_applies_immediately(qtbot, monkeypatch):
+    s = Settings()
+    d, _, _ = make(qtbot, monkeypatch, s)
+    assert s.no_repeat_hours == 3 and d.no_repeat.currentData() == 3
+    d.no_repeat.setCurrentIndex(d.no_repeat.findData(6))
+    assert s.no_repeat_hours == 6

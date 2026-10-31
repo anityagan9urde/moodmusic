@@ -27,6 +27,7 @@ class Settings:
     sensitivity: str = "normal"
     switch_mode: str = "wait"  # "wait" or "immediate"
     away_pause_minutes: int = 10  # 0 = off
+    no_repeat_hours: int = 3  # a played song stays out of rotation this long
     mode: str = "match"
     view: str = "simple"
     start_at_login: bool = False

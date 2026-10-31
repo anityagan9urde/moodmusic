@@ -165,3 +165,20 @@ def test_not_how_i_feel_forces_state(qtbot, engine, worker, monkeypatch):
     d = make(qtbot, engine, worker)
     d.feel_btn.click()
     assert ("force_mood", FaceState.SAD) in worker.calls
+
+
+def test_no_repeat_chip(qtbot, engine, worker):
+    engine.settings = Settings(no_repeat_hours=6)
+    d = make(qtbot, engine, worker)
+    assert "No repeats for: 6 h" in [c.text() for c in d.chips.chips]
+
+
+def test_folding_testing_section_shrinks_window(qtbot, engine, worker):
+    d = make(qtbot, engine, worker)
+    d.show()
+    qtbot.wait(20)
+    closed = d.height()
+    d.testing_toggle.click()
+    qtbot.waitUntil(lambda: d.height() > closed, timeout=1000)
+    d.testing_toggle.click()
+    qtbot.waitUntil(lambda: d.height() <= closed, timeout=1000)
