@@ -10,11 +10,15 @@ LIFT_CHILL_TO_UPBEAT_PROB = 0.2
 
 
 class MoodGroup(str, Enum):
-    UPBEAT = "upbeat"
+    """Song groups. Values are stored in the library DB, so never rename them."""
+    FOCUS = "focus"
+    PROFOUND = "profound"
+    ROMANTIC = "romantic"
     CHILL = "chill"
+    UPBEAT = "upbeat"
+    PARTY = "party"
     MELANCHOLY = "melancholy"
     INTENSE = "intense"
-    FOCUS = "focus"
     UNSORTED = "unsorted"
 
     @property
@@ -27,15 +31,19 @@ class MoodGroup(str, Enum):
 
 
 _EMOJI = {
-    MoodGroup.UPBEAT: "😄",
-    MoodGroup.CHILL: "😌",
-    MoodGroup.MELANCHOLY: "😔",
-    MoodGroup.INTENSE: "😤",
     MoodGroup.FOCUS: "🎧",
+    MoodGroup.PROFOUND: "🌌",
+    MoodGroup.ROMANTIC: "💞",
+    MoodGroup.CHILL: "😌",
+    MoodGroup.UPBEAT: "😄",
+    MoodGroup.PARTY: "🎉",
+    MoodGroup.MELANCHOLY: "😔",
+    MoodGroup.INTENSE: "🔥",
     MoodGroup.UNSORTED: "❔",
 }
 
 
+# LEGACY (old five-label pipeline; removed in the mood-states Task 10).
 # Target (valence, arousal) centre of each group; shared by smoother and corrections.
 GROUP_CENTRES: dict[MoodGroup, tuple[float, float]] = {
     MoodGroup.UPBEAT: (0.5, 0.5),
@@ -43,6 +51,9 @@ GROUP_CENTRES: dict[MoodGroup, tuple[float, float]] = {
     MoodGroup.MELANCHOLY: (-0.5, -0.5),
     MoodGroup.INTENSE: (-0.5, 0.5),
     MoodGroup.FOCUS: (0.0, 0.0),
+    MoodGroup.PROFOUND: (-0.1, -0.4),
+    MoodGroup.ROMANTIC: (0.4, -0.2),
+    MoodGroup.PARTY: (0.6, 0.7),
     MoodGroup.UNSORTED: (0.0, 0.0),
 }
 
@@ -52,12 +63,15 @@ class Mode(str, Enum):
     LIFT = "lift"
 
 
-_NEAREST = {
-    MoodGroup.UPBEAT: [MoodGroup.CHILL, MoodGroup.INTENSE, MoodGroup.FOCUS, MoodGroup.MELANCHOLY],
-    MoodGroup.CHILL: [MoodGroup.FOCUS, MoodGroup.UPBEAT, MoodGroup.MELANCHOLY, MoodGroup.INTENSE],
-    MoodGroup.MELANCHOLY: [MoodGroup.CHILL, MoodGroup.FOCUS, MoodGroup.INTENSE, MoodGroup.UPBEAT],
-    MoodGroup.INTENSE: [MoodGroup.UPBEAT, MoodGroup.FOCUS, MoodGroup.CHILL, MoodGroup.MELANCHOLY],
-    MoodGroup.FOCUS: [MoodGroup.CHILL, MoodGroup.UPBEAT, MoodGroup.MELANCHOLY, MoodGroup.INTENSE],
+_NEAREST = {  # intent-ordered fallback between song groups
+    MoodGroup.FOCUS: [MoodGroup.CHILL, MoodGroup.PROFOUND, MoodGroup.ROMANTIC, MoodGroup.UPBEAT, MoodGroup.MELANCHOLY, MoodGroup.PARTY, MoodGroup.INTENSE],
+    MoodGroup.PROFOUND: [MoodGroup.MELANCHOLY, MoodGroup.CHILL, MoodGroup.FOCUS, MoodGroup.ROMANTIC, MoodGroup.UPBEAT, MoodGroup.INTENSE, MoodGroup.PARTY],
+    MoodGroup.ROMANTIC: [MoodGroup.CHILL, MoodGroup.PROFOUND, MoodGroup.UPBEAT, MoodGroup.MELANCHOLY, MoodGroup.FOCUS, MoodGroup.PARTY, MoodGroup.INTENSE],
+    MoodGroup.CHILL: [MoodGroup.ROMANTIC, MoodGroup.FOCUS, MoodGroup.PROFOUND, MoodGroup.UPBEAT, MoodGroup.MELANCHOLY, MoodGroup.PARTY, MoodGroup.INTENSE],
+    MoodGroup.UPBEAT: [MoodGroup.PARTY, MoodGroup.ROMANTIC, MoodGroup.CHILL, MoodGroup.INTENSE, MoodGroup.FOCUS, MoodGroup.PROFOUND, MoodGroup.MELANCHOLY],
+    MoodGroup.PARTY: [MoodGroup.UPBEAT, MoodGroup.INTENSE, MoodGroup.ROMANTIC, MoodGroup.CHILL, MoodGroup.FOCUS, MoodGroup.PROFOUND, MoodGroup.MELANCHOLY],
+    MoodGroup.MELANCHOLY: [MoodGroup.PROFOUND, MoodGroup.CHILL, MoodGroup.ROMANTIC, MoodGroup.FOCUS, MoodGroup.UPBEAT, MoodGroup.INTENSE, MoodGroup.PARTY],
+    MoodGroup.INTENSE: [MoodGroup.PARTY, MoodGroup.UPBEAT, MoodGroup.FOCUS, MoodGroup.CHILL, MoodGroup.PROFOUND, MoodGroup.ROMANTIC, MoodGroup.MELANCHOLY],
 }
 
 

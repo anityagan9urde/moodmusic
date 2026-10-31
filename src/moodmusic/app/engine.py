@@ -290,7 +290,7 @@ class Engine:
                 self.current_pick, self._manual_uri = pick, None
                 if self._queued is pick:
                     self._queued = None
-                self.selector.mark_played(pb.uri)
+                self.selector.mark_played(pb.uri, self._clock())
             elif self.current_pick is not None and pb.uri == self.current_pick.song.uri:
                 pass
             elif prev is not None and ours_prev and near_end and seen[0] == prev:
@@ -327,7 +327,7 @@ class Engine:
                 return None
             mood = MoodState(self.current_pick.group)
         self._target = target_group(mood.group, self._mode, self._rng)
-        return self.selector.pick(self._target, mood)
+        return self.selector.pick([self._target], mood, now=self._clock())
 
     def _play_next(self) -> bool:
         pick = self._choose()
@@ -342,7 +342,7 @@ class Engine:
         self.current_pick, self._queued, self._manual_uri = pick, None, None
         self._seen = None
         self._handled_group = self._mood.group if self._mood else None
-        self.selector.mark_played(pick.song.uri)
+        self.selector.mark_played(pick.song.uri, self._clock())
         return True
 
     def _start(self, uri: str) -> bool:
@@ -401,7 +401,7 @@ class Engine:
         elif self._mode_immediate():
             self._play_next()
         elif self._queued is None:
-            pick = self.selector.pick(target, mood)
+            pick = self.selector.pick([target], mood, now=self._clock())
             if pick is not None and self._call(self.service.queue, pick.song.uri) is not _FAIL:
                 self._queued, self._handled_group = pick, mood.group
                 self._ours[pick.song.uri] = pick

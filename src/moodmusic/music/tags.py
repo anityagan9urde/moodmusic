@@ -10,8 +10,18 @@ MIN_SCORE = 30
 # Mood words only; pure genres (rock, pop, indie...) are deliberately excluded.
 TAG_KEYWORDS: dict[MoodGroup, list[str]] = {
     MoodGroup.UPBEAT: [
-        "happy", "feel good", "feelgood", "upbeat", "party", "dance", "cheerful",
-        "uplifting", "fun", "joyful", "summer", "danceable", "good vibes",
+        "happy", "feel good", "feelgood", "upbeat", "cheerful",
+        "uplifting", "fun", "joyful", "summer", "good vibes",
+    ],
+    MoodGroup.PARTY: [
+        "party", "club", "dance", "danceable", "edm", "bhangra", "banger",
+    ],
+    MoodGroup.ROMANTIC: [
+        "love", "romantic", "love songs", "love song", "romance", "ballad",
+    ],
+    MoodGroup.PROFOUND: [
+        "deep", "introspective", "reflective", "sufi", "soulful", "philosophical",
+        "spiritual", "ghazal",
     ],
     MoodGroup.CHILL: [
         "chill", "chillout", "chill out", "relaxing", "relax", "mellow", "peaceful",

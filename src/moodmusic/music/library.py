@@ -42,6 +42,10 @@ class SongLibrary:
                 "grp TEXT NOT NULL, tags TEXT NOT NULL, source TEXT NOT NULL, "
                 "override INTEGER NOT NULL DEFAULT 0)"
             )
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS play_history ("
+                "uri TEXT PRIMARY KEY, last_played REAL NOT NULL)"
+            )
             self._db.commit()
 
     def upsert(self, song: Song) -> None:
@@ -97,6 +101,16 @@ class SongLibrary:
         with self._lock:
             rows = self._db.execute("SELECT grp, COUNT(*) FROM songs GROUP BY grp").fetchall()
         return {MoodGroup(g): n for g, n in rows}
+
+    def record_play(self, uri: str, t: float) -> None:
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO play_history (uri, last_played) VALUES (?,?)",
+                             (uri, float(t)))
+            self._db.commit()
+
+    def last_played(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._db.execute("SELECT uri, last_played FROM play_history"))
 
     def close(self) -> None:
         with self._lock:

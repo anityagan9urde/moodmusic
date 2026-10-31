@@ -50,3 +50,9 @@ def test_keywords_cover_groups_not_unsorted_or_genres():
     allkw = {k for v in TAG_KEYWORDS.values() for k in v}
     assert not allkw & {"rock", "pop", "indie"}
     assert set(TAG_KEYWORDS) == set(MoodGroup) - {MoodGroup.UNSORTED}
+
+
+def test_tags_profound_romantic_party():
+    assert score_tags([("sufi", 100)])[0] == MoodGroup.PROFOUND
+    assert score_tags([("romantic", 80), ("love", 60)])[0] == MoodGroup.ROMANTIC
+    assert score_tags([("party", 90)])[0] == MoodGroup.PARTY

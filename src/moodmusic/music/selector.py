@@ -1,4 +1,4 @@
-"""Pick a song for a target mood group, avoiding recent repeats."""
+"""Pick a song for an intent (ordered song groups), avoiding recent repeats."""
 from __future__ import annotations
 
 import random
@@ -6,16 +6,9 @@ from collections import deque
 from dataclasses import dataclass
 
 from moodmusic.mood.groups import MoodGroup, nearest_groups
-from moodmusic.mood.smoother import MoodState
 from moodmusic.music.library import Song, SongLibrary
 
-_MOOD_WORDS = {
-    MoodGroup.UPBEAT: "upbeat and positive",
-    MoodGroup.CHILL: "calm and positive",
-    MoodGroup.MELANCHOLY: "low",
-    MoodGroup.INTENSE: "tense",
-    MoodGroup.FOCUS: "focused",
-}
+FRESH_FRACTION = 0.25  # Fresh picks come from the least recently played quarter
 
 
 @dataclass
@@ -24,6 +17,7 @@ class Pick:
     group: MoodGroup
     reason: str
     fell_back_from: MoodGroup | None
+    groups: list[MoodGroup] | None = None
 
 
 class SongSelector:
@@ -32,7 +26,9 @@ class SongSelector:
         self._rng = rng
         self._recent: dict[MoodGroup, deque[str]] = {}
 
-    def mark_played(self, uri: str) -> None:
+    def mark_played(self, uri: str, now: float | None = None) -> None:
+        if now is not None:
+            self.library.record_play(uri, now)
         song = self.library.get(uri)
         if song is None:
             return
@@ -41,15 +37,36 @@ class SongSelector:
             dq.remove(uri)
         dq.append(uri)
 
-    def pick(self, target: MoodGroup, mood: MoodState) -> Pick | None:
-        for group in [target, *nearest_groups(target)]:
+    def pick(self, groups: list[MoodGroup], mood, fresh: bool = False,
+             now: float = 0.0) -> Pick | None:
+        """Pick from `groups` in order, then nearest_groups(groups[0]) as fallback.
+
+        `fresh` pools every song in `groups` and picks among the least recently played.
+        """
+        groups = list(groups)
+        if fresh:
+            pool = [s for g in groups for s in self.library.songs(g)]
+            if pool:
+                song = self._choose_fresh(pool)
+                return Pick(song, song.group, self._reason(song, song.group, mood, None, True),
+                            None, groups)
+        target = groups[0]
+        order = groups + [g for g in nearest_groups(target) if g not in groups]
+        for group in order:
             songs = self.library.songs(group)
             if not songs:
                 continue
             song = self._choose(group, songs)
-            fell = target if group != target else None
-            return Pick(song, group, self._reason(song, group, mood, fell), fell)
+            fell = target if group not in groups else None
+            return Pick(song, group, self._reason(song, group, mood, fell), fell, groups)
         return None
+
+    def _choose_fresh(self, pool: list[Song]) -> Song:
+        last = self.library.last_played()
+        ranked = sorted(pool, key=lambda s: last.get(s.uri, float("-inf")))
+        never = [s for s in ranked if s.uri not in last]
+        candidates = never or ranked[:max(1, int(len(ranked) * FRESH_FRACTION))]
+        return self._rng.choice(candidates)
 
     def _choose(self, group: MoodGroup, songs: list[Song]) -> Song:
         size = max(1, int(0.8 * len(songs)))
@@ -66,11 +83,12 @@ class SongSelector:
                 return by_uri[uri]
         return self._rng.choice(songs)
 
-    def _reason(self, song: Song, group: MoodGroup, mood: MoodState,
-                fell_back_from: MoodGroup | None) -> str:
-        words = _MOOD_WORDS.get(mood.group, mood.group.label.lower())
-        text = f"{group.label}: you look {words}"
-        if song.source == "artist":
+    def _reason(self, song: Song, group: MoodGroup, mood,
+                fell_back_from: MoodGroup | None, fresh: bool = False) -> str:
+        text = f"{group.label}: you seem {_mood_label(mood).lower()}"
+        if fresh:
+            text += "; something you haven't heard in a while"
+        elif song.source == "artist":
             text += "; sorted by artist style"
         elif song.source == "user":
             text += "; you filed it here"
@@ -79,3 +97,11 @@ class SongSelector:
         if fell_back_from is not None:
             text += f" (no {fell_back_from.label} songs yet)"
         return text
+
+
+def _mood_label(mood) -> str:
+    """Face state label (FaceMood.state) or, until the switch-over, the old MoodState.group."""
+    state = getattr(mood, "state", None)
+    if state is not None:
+        return state.label
+    return mood.group.label

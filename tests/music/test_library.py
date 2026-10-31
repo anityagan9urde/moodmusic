@@ -56,3 +56,14 @@ def test_survives_reopen(tmp_path):
     lib.upsert(mk("u1"))
     lib.close()
     assert SongLibrary(p).get("u1") is not None
+
+
+def test_play_history_roundtrip(tmp_path):
+    lib = SongLibrary(tmp_path / "h.db")
+    assert lib.last_played() == {}
+    lib.record_play("u1", 10.0)
+    lib.record_play("u1", 20.0)
+    lib.record_play("u2", 15.0)
+    lib.close()
+    lib = SongLibrary(tmp_path / "h.db")
+    assert lib.last_played() == {"u1": 20.0, "u2": 15.0}
