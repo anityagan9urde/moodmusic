@@ -8,8 +8,9 @@ from pathlib import Path
 from PySide6.QtWidgets import QWizard
 
 from moodmusic.config import HOLD_SECONDS, Settings, data_dir, save_settings
-from moodmusic.ui.wizard_pages import (CalibrationPage, CameraPage, LastFmPage, SourcePage,
-                                       SpotifyPage, WelcomePage)
+from moodmusic.ui.async_util import load_playlists
+from moodmusic.ui.wizard_pages import LastFmPage, SpotifyPage, WelcomePage
+from moodmusic.ui.wizard_vision_pages import CalibrationPage, CameraPage, SourcePage
 
 log = logging.getLogger(__name__)
 
@@ -69,8 +70,7 @@ class SetupWizard(QWizard):
             settings.lastfm_api_key = key
 
         def default_playlists() -> list:
-            from moodmusic.spotify.client import SpotifyService, make_spotify
-            return SpotifyService(make_spotify(settings.spotify_client_id)).playlists()
+            return load_playlists(settings.spotify_client_id)
 
         if cameras_fn is None:
             from moodmusic.vision.camera import list_cameras
@@ -91,6 +91,7 @@ class SetupWizard(QWizard):
         worker = self._worker_factory(index)
         worker.preview.connect(self._camera.on_preview)
         worker.quality.connect(self._camera.on_quality)
+        worker.camera_status.connect(self._camera.on_status)
         worker.calibration_progress.connect(self._calibration.on_progress)
         worker.calibration_done.connect(self._calibration.on_done)
         worker.set_preview(True)
@@ -104,11 +105,15 @@ class SetupWizard(QWizard):
 
     def accept(self) -> None:
         source = self.page(PAGE_SOURCE)
+        if not source.isComplete():
+            return  # no valid selection yet
         self.settings.source_playlist_id = source.selected_id()
         self.settings.setup_complete = True
         save_settings(self.settings)
         super().accept()
 
     def done(self, result: int) -> None:
+        for pid in (PAGE_SPOTIFY, PAGE_LASTFM, PAGE_SOURCE):
+            self.page(pid).shutdown()  # late results from running threads are ignored
         self.stop_worker()
         super().done(result)

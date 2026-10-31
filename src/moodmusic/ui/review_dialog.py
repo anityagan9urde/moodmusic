@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QMimeData, Qt, QTimer
+from PySide6.QtCore import QMimeData, Qt, QTimer, Slot
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QGridLayout, QHBoxLayout, QLabel,
-                               QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
+                               QListWidget, QListWidgetItem, QProgressBar, QPushButton, QVBoxLayout,
+                               QWidget)
 
 from moodmusic.mood.groups import MoodGroup
 from moodmusic.music.library import Song, SongLibrary
@@ -46,14 +47,32 @@ class GroupList(QListWidget):
 
 
 class ReviewDialog(QDialog):
-    def __init__(self, library: SongLibrary, parent=None) -> None:
+    def __init__(self, library: SongLibrary, scan=None, parent=None) -> None:
         super().__init__(parent)
-        self.library = library
+        self.library, self.scan = library, scan
         self.setWindowTitle("Review songs")
         self.resize(900, 560)
         outer = QVBoxLayout(self)
         outer.addWidget(QLabel("Drag songs between lists to fix their mood. "
                                "Your choices are remembered when the library is rescanned."))
+        top = QHBoxLayout()
+        self.scan_label = QLabel("")
+        self.scan_bar = QProgressBar()
+        self.scan_bar.setTextVisible(False)
+        self.rescan_button = QPushButton("Rescan now")
+        self.rescan_button.clicked.connect(self.rescan)
+        top.addWidget(self.scan_label, 1)
+        top.addWidget(self.scan_bar)
+        top.addWidget(self.rescan_button)
+        outer.addLayout(top)
+        self.scan_bar.hide()
+        if scan is None:
+            self.rescan_button.hide()
+        else:
+            scan.progress.connect(self.on_scan_progress)
+            scan.finished_with.connect(self.on_scan_finished)
+            if scan.is_running():
+                self._show_running("Scanning…")
         grid = QGridLayout()
         outer.addLayout(grid)
         self.lists: dict[MoodGroup, GroupList] = {}
@@ -66,6 +85,29 @@ class ReviewDialog(QDialog):
             grid.addLayout(box, n // 3, n % 3)
         self._songs: dict[str, Song] = {}
         self._suggestions: dict[str, MoodGroup | None] = {}
+        self.refresh()
+
+    def _show_running(self, text: str) -> None:
+        self.scan_label.setText(text)
+        self.scan_bar.show()
+        self.rescan_button.setEnabled(False)
+
+    def rescan(self) -> None:
+        if self.scan is not None and not self.scan.is_running():
+            self.scan.rescan()
+            self._show_running("Scanning…")
+
+    @Slot(object)
+    def on_scan_progress(self, p) -> None:
+        self.scan_bar.setRange(0, max(p.total, 1))
+        self.scan_bar.setValue(p.done)
+        self._show_running(f"Scanning {p.done}/{p.total}: {p.current}")
+
+    @Slot(object)
+    def on_scan_finished(self, _result) -> None:
+        self.scan_bar.hide()
+        self.scan_label.setText("")
+        self.rescan_button.setEnabled(True)
         self.refresh()
 
     def suggestion(self, uri: str) -> MoodGroup | None:

@@ -69,6 +69,7 @@ class EngineBridge(QObject):
 
 
 class ScanThread(QThread):
+    progress = Signal(object)  # ScanProgress
     finished_with = Signal(object)  # final ScanProgress, or None if the scan crashed
 
     def __init__(self, scanner, playlist_id) -> None:
@@ -82,11 +83,39 @@ class ScanThread(QThread):
 
     def run(self) -> None:
         try:
-            result = self._scanner.run(self._playlist_id, lambda _p: None, lambda: self._stop)
+            result = self._scanner.run(self._playlist_id, self.progress.emit, lambda: self._stop)
         except Exception:
             log.exception("Library scan failed")
             result = None
         self.finished_with.emit(result)
+
+
+class ScanController(QObject):
+    """Owns scan threads: one at a time, restartable (R15)."""
+    progress = Signal(object)
+    finished_with = Signal(object)
+
+    def __init__(self, make_scanner: Callable[[], object],
+                 get_playlist: Callable[[], str | None]) -> None:
+        super().__init__()
+        self._make_scanner, self._get_playlist = make_scanner, get_playlist
+        self._threads: list[ScanThread] = []
+
+    def is_running(self) -> bool:
+        return any(t.isRunning() for t in self._threads)
+
+    def rescan(self) -> None:
+        if self.is_running():
+            return
+        self._threads = [t for t in self._threads if t.isRunning()]
+        thread = ScanThread(self._make_scanner(), self._get_playlist())
+        thread.progress.connect(self.progress)
+        thread.finished_with.connect(self.finished_with)
+        self._threads.append(thread)
+        thread.start()
+
+    def stop(self) -> bool:
+        return all([t.stop() for t in self._threads])
 
 
 def report_scan(result, notify: Callable[[str, str], None]) -> None:
@@ -169,12 +198,11 @@ def run() -> int:
     widget, dashboard = MoodWidget(engine, worker), Dashboard(engine, worker)
     views = ViewManager(settings, widget, dashboard)
     bridge = EngineBridge(engine, worker)
-    scan: list[ScanThread] = []
     timer = QTimer()
 
     def quit_app() -> None:
         timer.stop()
-        scan_done = all(t.stop() for t in scan)
+        scan_done = scan.stop()
         worker.stop()  # sets the flag and waits up to 2 s, so the camera is released
         if scan_done:
             library.close()
@@ -185,13 +213,17 @@ def run() -> int:
 
     def open_settings() -> None:
         _open_dialog("moodmusic.ui.settings_dialog", "SettingsDialog", "Settings", tray,
-                     settings, engine, worker)
+                     settings, engine, worker, scan)
 
+    scan = ScanController(
+        lambda: Scanner(scan_service, LastFmClient(settings.lastfm_api_key), library),
+        lambda: settings.source_playlist_id)
+    scan.finished_with.connect(lambda r: report_scan(r, tray.message))
     tray = Tray(engine, views, open_settings, quit_app)
     dashboard.settings_requested.connect(open_settings)
     dashboard.review_requested.connect(
         lambda: _open_dialog("moodmusic.ui.review_dialog", "ReviewDialog", "Song review",
-                             tray, library))
+                             tray, library, scan))
     worker.calibration_done.connect(
         lambda _b: tray.message("Mood Music", "Calibration finished. Thanks!"))
     worker.camera_status.connect(
@@ -218,14 +250,7 @@ def run() -> int:
         worker.start_calibration()
         tray.message("Mood Music", "Calibrating: look at the camera for about 20 seconds.")
 
-    def start_scan() -> None:
-        thread = ScanThread(Scanner(scan_service, LastFmClient(settings.lastfm_api_key), library),
-                            settings.source_playlist_id)
-        thread.finished_with.connect(lambda r: report_scan(r, tray.message))
-        scan.append(thread)
-        thread.start()
-
-    start_scan()
+    scan.rescan()
     views.show_view(settings.view)
     app._moodmusic_refs = (bridge, tray, views)  # keep alive for the event loop
     code = app.exec()

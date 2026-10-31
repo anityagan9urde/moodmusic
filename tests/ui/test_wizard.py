@@ -1,3 +1,5 @@
+import threading
+
 from PySide6.QtCore import QObject, Signal
 
 from moodmusic.config import Settings
@@ -10,6 +12,7 @@ from moodmusic.vision.types import QualityReport
 class WizWorker(QObject):
     quality = Signal(object)
     preview = Signal(object)
+    camera_status = Signal(str)
     calibration_progress = Signal(float)
     calibration_done = Signal(object)
 
@@ -171,3 +174,56 @@ def test_reject_stops_worker_without_saving(qtbot, monkeypatch):
     w.page(wiz.PAGE_CAMERA).initializePage()
     w.reject()
     assert "stop" in workers[0].calls and not s.setup_complete and saved == []
+
+
+def test_camera_status_messages(qtbot, monkeypatch):
+    w, s, _, workers = make(qtbot, monkeypatch)
+    cam = w.page(wiz.PAGE_CAMERA)
+    cam.initializePage()
+    workers[0].quality.emit(QualityReport(True, None))
+    workers[0].camera_status.emit("reconnecting")
+    assert "Reconnecting" in cam.quality_label.text() and not cam.isComplete()
+    workers[0].camera_status.emit("unavailable")
+    assert "Camera unavailable" in cam.quality_label.text()
+
+
+def test_reject_while_login_blocked_ignores_late_result(qtbot, monkeypatch):
+    from moodmusic.ui import async_util
+    gate = threading.Event()
+
+    def login(cid):
+        gate.wait(5)
+    w, s, _, _ = make(qtbot, monkeypatch, login_fn=login)
+    page = w.page(wiz.PAGE_SPOTIFY)
+    page.client_edit.setText("abc")
+    page.start_login()
+    w.reject()
+    gate.set()
+    qtbot.waitUntil(lambda: not async_util._LIVE, timeout=3000)
+    qtbot.wait(50)
+    assert s.spotify_client_id == "" and not page.isComplete()
+
+
+def test_source_load_error_offers_liked_songs_and_retry(qtbot, monkeypatch):
+    calls = []
+
+    def pl():
+        calls.append(1)
+        if len(calls) == 1:
+            raise SpotifyError("x")
+        return [("p1", "Mix", 3)]
+    w, s, _, _ = make(qtbot, monkeypatch)
+    src = wiz.SourcePage(s, pl)
+    qtbot.addWidget(src)
+    src.initializePage()
+    qtbot.waitUntil(lambda: src.list.count() == 1, timeout=3000)
+    assert src.isComplete() and src.selected_id() is None
+    assert not src.retry_button.isHidden()
+    src.load()
+    qtbot.waitUntil(lambda: src.list.count() == 2, timeout=3000)
+
+
+def test_accept_without_selection_does_nothing(qtbot, monkeypatch):
+    w, s, saved, _ = make(qtbot, monkeypatch)
+    w.accept()
+    assert not s.setup_complete and saved == []

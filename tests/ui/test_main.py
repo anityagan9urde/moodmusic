@@ -115,3 +115,19 @@ def test_run_wizard_missing_shows_message(monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a: shown.append(a[2])))
     assert main._run_wizard(Settings()) is None
     assert shown == ["Setup isn't available yet"]
+
+
+def test_scan_controller_runs_one_at_a_time(qtbot):
+    from moodmusic.ui.main import ScanController
+
+    class Scanner:
+        def run(self, pid, on_progress, should_stop):
+            on_progress("p")
+            return "done"
+
+    c = ScanController(lambda: Scanner(), lambda: None)
+    with qtbot.waitSignal(c.finished_with, timeout=3000) as fin:
+        c.rescan()
+    assert fin.args == ["done"]
+    qtbot.waitUntil(lambda: not c.is_running(), timeout=3000)
+    assert c.stop() is True
