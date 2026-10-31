@@ -1,4 +1,4 @@
-"""Vision worker thread: camera -> face -> emotion -> baseline -> smoother.
+"""Vision worker thread: camera -> face -> signals -> rolling features -> face state.
 
 Camera, tracker and model are created inside run() so MediaPipe/ONNX objects live
 on the worker thread. Frames stay in memory; nothing is written to disk.
@@ -9,7 +9,6 @@ import logging
 import queue
 import threading
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -18,8 +17,12 @@ import numpy as np
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
+from moodmusic.mood.baselines import PersonalBaselines, save_baselines
 from moodmusic.mood.calibration import Baseline, Calibrator, apply_baseline, save_baseline
+from moodmusic.mood.features import FeatureTracker
+from moodmusic.mood.rules import decide, score_states
 from moodmusic.vision.face import crop_face
+from moodmusic.vision.signals import extract_signals
 from moodmusic.vision.quality import assess_quality
 from moodmusic.vision.types import EmotionReading, FaceObservation
 
@@ -29,10 +32,8 @@ MAX_CONSECUTIVE_ERRORS = 20
 ERROR_BACKOFF_S = 2.0
 SETUP_RETRY_S = 10.0  # retry camera/model setup this often after it failed
 LANDMARK_STRIDE = 12
-
-
-def _clamp(x: float) -> float:
-    return max(-1.0, min(1.0, x))
+STATE_EVERY_S = 0.5  # decide the face state twice a second, not every frame
+BASELINE_SAVE_EVERY_S = 300.0
 
 
 def _annotated_qimage(frame_bgr: np.ndarray, obs: FaceObservation) -> QImage:
@@ -57,20 +58,30 @@ class VisionWorker(QThread):
     camera_status = Signal(str)
     calibration_progress = Signal(float)
     calibration_done = Signal(object)
+    features_ready = Signal(object)  # Features, for the dashboard's signals panel
 
     def __init__(self, camera_factory, tracker_factory, model_factory,
-                 baseline: Baseline | None, smoother, corrections, fps: float = 8,
+                 baseline: Baseline | None, state_tracker, corrections,
+                 baselines: PersonalBaselines, fps: float = 8,
                  calibration_seconds: float = 20.0,
                  clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep,
-                 baseline_path: Path | None = None, parent=None) -> None:
+                 baseline_path: Path | None = None, baselines_path: Path | None = None,
+                 parent=None) -> None:
         super().__init__(parent)
         self._camera_factory = camera_factory
         self._tracker_factory = tracker_factory
         self._model_factory = model_factory
         self.baseline = baseline
-        self._smoother = smoother
+        self._state_tracker = state_tracker
         self._corrections = corrections
+        self._baselines = baselines
+        self._baselines_path = baselines_path
+        self._features = FeatureTracker()
+        self._prev_sig = None
+        self._next_state_t: float | None = None
+        self._last_state_t: float | None = None
+        self._next_save_t: float | None = None
         self._fps = fps
         self._calibration_seconds = calibration_seconds
         self._clock = clock
@@ -91,8 +102,9 @@ class VisionWorker(QThread):
     def set_preview(self, enabled: bool) -> None:
         self._preview = bool(enabled)
 
-    def force_mood(self, group) -> None:
-        self._cmds.put(("force", group))
+    def force_mood(self, state) -> None:
+        """Not how I feel: `state` is the FaceState the user picked."""
+        self._cmds.put(("force", state))
 
     def set_hold_seconds(self, seconds: float) -> None:
         self._cmds.put(("hold", seconds))
@@ -109,6 +121,7 @@ class VisionWorker(QThread):
             if self._setup(parts):
                 self._loop(*parts)
         finally:
+            self._save_baselines()
             camera, tracker = parts[0], parts[1]
             for closer in (getattr(camera, "release", None), getattr(tracker, "close", None)):
                 if closer is not None:
@@ -176,20 +189,18 @@ class VisionWorker(QThread):
                     self._calibrator = Calibrator(duration_s=self._calibration_seconds)
                     self.calibration_progress.emit(0.0)
                 elif kind == "hold":
-                    self._smoother.set_hold(arg)
+                    self._state_tracker.set_hold(arg)
                 elif kind == "force":
                     self._apply_force(arg, t)
             except Exception:
                 log.exception("Worker command %s failed", kind)
 
-    def _apply_force(self, group, t: float) -> None:
-        s = self._smoother.state
+    def _apply_force(self, state, t: float) -> None:
         try:
-            self._corrections.record(predicted=s.group, actual=group,
-                                     valence=s.valence, arousal=s.arousal)
+            self._corrections.record(predicted=self._state_tracker.state.state, actual=state)
         except Exception:
             log.exception("Recording correction failed")
-        self.mood.emit(self._smoother.force(group, t))
+        self.mood.emit(self._state_tracker.force(state, t))
 
     def _step(self, camera, tracker, model) -> None:
         t = self._clock()
@@ -216,21 +227,45 @@ class VisionWorker(QThread):
         if q != self._last_quality:
             self._last_quality = q
             self.quality.emit(q)
-        if not q.ok or obs.bbox is None:
+        if not q.ok or obs.bbox is None:  # absence (or an unusable face) still feeds features
+            self._feed(FaceObservation(0), None, t)
             return
 
         raw = model.predict(crop_face(frame, obs.bbox))
         self.reading.emit(raw)
-
+        self._feed(obs, apply_baseline(raw, self.baseline) if self.baseline else raw, t)
         if self._calibrator is not None:
             self._calibrate(raw, t)
-            return
 
-        r = apply_baseline(raw, self.baseline) if self.baseline else raw
-        dv, da = self._corrections.bias()
-        if dv or da:
-            r = replace(r, valence=_clamp(r.valence + dv), arousal=_clamp(r.arousal + da))
-        self.mood.emit(self._smoother.update(r, t))
+    def _feed(self, obs: FaceObservation, reading, t: float) -> None:
+        sig = extract_signals(obs, reading, self._prev_sig)
+        self._prev_sig = sig if sig.face else None
+        self._features.add(sig, t)
+        if self._next_state_t is None:
+            self._next_state_t = t + STATE_EVERY_S
+            self._next_save_t = t + BASELINE_SAVE_EVERY_S
+            self._last_state_t = t
+            return
+        if t < self._next_state_t:
+            return
+        self._next_state_t = t + STATE_EVERY_S
+        f = self._features.features(t)
+        self._baselines.update(f, t - self._last_state_t)
+        self._last_state_t = t
+        if self._calibrator is None:
+            scores = score_states(f, self._baselines, self._corrections.bias())
+            decision = decide(scores, self._state_tracker.state.state)
+            self.mood.emit(self._state_tracker.update(decision, f, t))
+        self.features_ready.emit(f)
+        if t >= self._next_save_t:
+            self._next_save_t = t + BASELINE_SAVE_EVERY_S
+            self._save_baselines()
+
+    def _save_baselines(self) -> None:
+        try:
+            save_baselines(self._baselines, self._baselines_path)
+        except Exception:
+            log.exception("Saving signal baselines failed")
 
     def _calibrate(self, raw: EmotionReading, t: float) -> None:
         cal = self._calibrator
@@ -250,5 +285,7 @@ class VisionWorker(QThread):
             save_baseline(b, self._baseline_path)
         except Exception:
             log.exception("Saving baseline failed")
+        self._baselines.calibrate_rest(self._features.features(t))
+        self._save_baselines()
         self.baseline = b
         self.calibration_done.emit(b)

@@ -6,9 +6,10 @@ import pytest
 from PySide6.QtGui import QImage
 
 from moodmusic.app.worker import VisionWorker
+from moodmusic.mood.baselines import PersonalBaselines, load_baselines
 from moodmusic.mood.calibration import Baseline
-from moodmusic.mood.groups import MoodGroup
-from moodmusic.mood.smoother import MoodSmoother, MoodState
+from moodmusic.mood.states import FaceState
+from moodmusic.mood.tracker import FaceMood, StateTracker
 from moodmusic.vision.types import EmotionReading, FaceObservation
 
 
@@ -59,11 +60,12 @@ class FakeModel:
 
 
 class FakeCorrections:
-    def __init__(self):
+    def __init__(self, bias=None):
         self.records = []
+        self._bias = bias or {}
 
     def bias(self):
-        return (0.0, 0.0)
+        return dict(self._bias)
 
     def record(self, **kw):
         self.records.append(kw)
@@ -81,21 +83,21 @@ class Clock:
             return self.t
 
 
-class SpySmoother:
+class SpyStateTracker:
     def __init__(self):
-        self.state = MoodState(MoodGroup.UPBEAT, 0.0, 0.25, -0.3, {}, None)
-        self.updates = []
+        self.state = FaceMood(FaceState.HAPPY, 0.0, "smiling", 0.25, -0.3, {}, None)
+        self.updates = []  # (decision, features, t)
         self.holds = []
 
-    def update(self, r, t):
-        self.updates.append(r)
+    def update(self, decision, f, t):
+        self.updates.append((decision, f, t))
         return self.state
 
     def set_hold(self, seconds):
         self.holds.append(seconds)
 
-    def force(self, group, t):
-        return MoodState(group, t, 0.0, 0.0, {}, None)
+    def force(self, state, t):
+        return FaceMood(state, t, "you said so")
 
 
 class NoFaceTracker(FakeTracker):
@@ -108,18 +110,18 @@ class NoFaceTracker(FakeTracker):
         return FaceObservation(0)
 
 
-def make(tmp_path, model=None, camera=None, tracker=None, smoother=None,
-         corrections=None, sleep=None, **kw):
+def make(tmp_path, model=None, camera=None, tracker=None, state_tracker=None,
+         corrections=None, sleep=None, baselines=None, clock=None, **kw):
     camera = camera or FakeCamera()
     tracker = tracker or FakeTracker()
     model = model or FakeModel()
     w = VisionWorker(
         lambda: camera, lambda: tracker, lambda: model,
-        kw.pop("baseline", None), smoother or MoodSmoother(hold_seconds=0.0),
-        corrections or FakeCorrections(),
-        fps=kw.pop("fps", 20), clock=Clock(),
+        kw.pop("baseline", None), state_tracker or StateTracker(hold_seconds=0.0),
+        corrections or FakeCorrections(), baselines or PersonalBaselines(),
+        fps=kw.pop("fps", 20), clock=clock or Clock(),
         sleep=sleep or (lambda s: time.sleep(0.001)),
-        baseline_path=tmp_path / "b.json", **kw)
+        baseline_path=tmp_path / "b.json", baselines_path=tmp_path / "sb.json", **kw)
     return w, camera, tracker, model
 
 
@@ -189,31 +191,32 @@ def test_preview_emitted_when_enabled(qtbot, tmp_path):
     assert isinstance(img, QImage) and img.width() == 320 and img.height() == 240
 
 
-def test_force_mood_records_correction_and_emits(qtbot, tmp_path):
-    spy = SpySmoother()
-    w, *_ = make(tmp_path, smoother=spy)
+def test_force_mood_records_state_correction(qtbot, tmp_path):
+    spy = SpyStateTracker()
+    w, *_ = make(tmp_path, state_tracker=spy)
     try:
         with qtbot.waitSignal(w.mood, timeout=3000):
             w.start()
         with qtbot.waitSignal(w.mood, timeout=3000,
-                              check_params_cb=lambda s: s.group == MoodGroup.MELANCHOLY):
-            w.force_mood(MoodGroup.MELANCHOLY)
+                              check_params_cb=lambda s: s.state == FaceState.DEEP_THOUGHT):
+            w.force_mood(FaceState.DEEP_THOUGHT)
     finally:
         w.stop()
-    rec = w._corrections.records
-    assert rec[0] == {"predicted": MoodGroup.UPBEAT, "actual": MoodGroup.MELANCHOLY,
-                      "valence": 0.25, "arousal": -0.3}
+    assert w._corrections.records[0] == {"predicted": FaceState.HAPPY,
+                                         "actual": FaceState.DEEP_THOUGHT}
 
 
-def test_quality_not_ok_skips_model_and_smoother(qtbot, tmp_path):
-    spy, trk = SpySmoother(), NoFaceTracker()
-    w, _, _, model = make(tmp_path, tracker=trk, smoother=spy)
+def test_no_face_frames_feed_absence(qtbot, tmp_path):
+    spy, trk = SpyStateTracker(), NoFaceTracker()
+    w, _, _, model = make(tmp_path, tracker=trk, state_tracker=spy)
     try:
         w.start()
-        qtbot.waitUntil(lambda: trk.calls >= 5, timeout=3000)
+        qtbot.waitUntil(lambda: len(spy.updates) >= 2, timeout=3000)
     finally:
         w.stop()
-    assert model.calls == 0 and spy.updates == []
+    assert model.calls == 0
+    f = spy.updates[-1][1]
+    assert f.face_ratio_10s == 0.0 and f.observed_s == 0.0
 
 
 class SeqCamera(FakeCamera):
@@ -283,9 +286,9 @@ def test_twenty_errors_emit_unavailable_back_off_and_reset(qtbot, tmp_path):
     assert sum(1 for x in sleeps if x == 0.1) >= 19  # ~2 s backoff via injected sleep
 
 
-def test_set_hold_seconds_reaches_smoother(qtbot, tmp_path):
-    spy = SpySmoother()
-    w, *_ = make(tmp_path, smoother=spy)
+def test_set_hold_seconds_reaches_state_tracker(qtbot, tmp_path):
+    spy = SpyStateTracker()
+    w, *_ = make(tmp_path, state_tracker=spy)
     try:
         w.start()
         w.set_hold_seconds(7.0)
@@ -294,37 +297,93 @@ def test_set_hold_seconds_reaches_smoother(qtbot, tmp_path):
         w.stop()
 
 
-class BiasCorrections(FakeCorrections):
-    def __init__(self, dv, da):
-        super().__init__()
-        self._b = (dv, da)
-
-    def bias(self):
-        return self._b
-
-
-def _first_update(qtbot, tmp_path, **kw):
-    spy = SpySmoother()
-    w, *_ = make(tmp_path, smoother=spy, **kw)
+def test_emotion_baseline_applied_before_features(qtbot, tmp_path):
+    spy = SpyStateTracker()
+    w, *_ = make(tmp_path, state_tracker=spy, baseline=Baseline(0.1, 0.05, 1.0))
     try:
         w.start()
         qtbot.waitUntil(lambda: len(spy.updates) >= 1, timeout=3000)
     finally:
         w.stop()
-    return spy.updates[0]
+    f = spy.updates[0][1]
+    # raw valence 0.4, arousal 0.2 minus the calibrated baseline
+    assert f.valence_30s == pytest.approx(0.3) and f.arousal_30s == pytest.approx(0.15)
 
 
-def test_baseline_and_bias_applied_before_smoother(qtbot, tmp_path):
-    r = _first_update(qtbot, tmp_path, baseline=Baseline(0.1, 0.05, 1.0),
-                      corrections=BiasCorrections(0.2, 0.0))
-    # raw valence 0.4, arousal 0.2 -> baseline -> 0.3, 0.15 -> bias -> 0.5, 0.15
-    assert r.valence == pytest.approx(0.5)
-    assert r.arousal == pytest.approx(0.15)
+def test_state_bias_reaches_rules(qtbot, tmp_path, monkeypatch):
+    from moodmusic.app import worker as wmod
+    seen = []
+    real = wmod.score_states
+
+    def spy_scores(f, b, bias=None):
+        seen.append(bias)
+        return real(f, b, bias)
+    monkeypatch.setattr(wmod, "score_states", spy_scores)
+    w, *_ = make(tmp_path, corrections=FakeCorrections({FaceState.LOVE: 0.1}))
+    try:
+        w.start()
+        qtbot.waitUntil(lambda: len(seen) >= 1, timeout=3000)
+    finally:
+        w.stop()
+    assert seen[0] == {FaceState.LOVE: 0.1}
 
 
-def test_bias_is_clamped(qtbot, tmp_path):
-    r = _first_update(qtbot, tmp_path, corrections=BiasCorrections(0.9, -1.5))
-    assert r.valence == 1.0 and r.arousal == -1.0
+class ManualClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+class TickingCamera(FakeCamera):
+    """Advances a shared clock by one frame (1/8 s) per read, so time is deterministic."""
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+        self.reads = 0
+
+    def read(self):
+        self.reads += 1
+        self.clock.t += 0.125
+        return _frame()
+
+
+def test_emits_state_every_half_second_not_every_frame(qtbot, tmp_path):
+    clock = ManualClock()
+    cam = TickingCamera(clock)
+    w, *_ = make(tmp_path, camera=cam, clock=clock)
+    moods = []
+    w.mood.connect(moods.append)
+    try:
+        w.start()
+        qtbot.waitUntil(lambda: cam.reads >= 40, timeout=3000)  # 5 s of frames
+    finally:
+        w.stop()
+    qtbot.wait(50)
+    frames = cam.reads
+    assert frames / 4 - 2 <= len(moods) <= frames / 4 + 2  # ~2 per second at 8 fps
+
+
+def test_baselines_saved_on_stop(qtbot, tmp_path):
+    w, *_ = make(tmp_path)
+    with qtbot.waitSignal(w.mood, timeout=3000):
+        w.start()
+    w.stop()
+    assert load_baselines(tmp_path / "sb.json").observed_s > 0
+
+
+def test_calibration_sets_rest_baselines_and_saves(qtbot, tmp_path):
+    b = PersonalBaselines()
+    w, *_ = make(tmp_path, calibration_seconds=0.5, baselines=b)
+    try:
+        w.start_calibration()
+        with qtbot.waitSignal(w.calibration_done, timeout=5000):
+            w.start()
+    finally:
+        w.stop()
+    assert "gaze_on_ratio_30s" in b.to_dict()["rest"]
+    assert (tmp_path / "sb.json").exists()
 
 
 def test_calibration_restarts_on_too_few_samples(qtbot, tmp_path):
@@ -366,8 +425,9 @@ def test_model_setup_failure_reports_and_retries(qtbot, tmp_path, monkeypatch):
         return model
     camera, tracker = FakeCamera(), FakeTracker()
     w = VisionWorker(lambda: camera, lambda: tracker, model_factory, None,
-                     MoodSmoother(hold_seconds=0.0), FakeCorrections(), fps=20, clock=Clock(),
-                     sleep=lambda s: time.sleep(0.001), baseline_path=tmp_path / "b.json")
+                     StateTracker(hold_seconds=0.0), FakeCorrections(), PersonalBaselines(),
+                     fps=20, clock=Clock(step=0.05), sleep=lambda s: time.sleep(0.001),
+                     baseline_path=tmp_path / "b.json", baselines_path=tmp_path / "sb.json")
     statuses = []
     w.camera_status.connect(statuses.append)
     try:
@@ -383,9 +443,10 @@ def test_model_setup_failure_reports_and_retries(qtbot, tmp_path, monkeypatch):
 def test_setup_retry_stops_promptly(qtbot, tmp_path):
     def bad():
         raise RuntimeError("no model")
-    w = VisionWorker(FakeCamera, FakeTracker, bad, None, MoodSmoother(hold_seconds=0.0),
-                     FakeCorrections(), fps=20, clock=Clock(),
-                     sleep=lambda s: time.sleep(0.001), baseline_path=tmp_path / "b.json")
+    w = VisionWorker(FakeCamera, FakeTracker, bad, None, StateTracker(hold_seconds=0.0),
+                     FakeCorrections(), PersonalBaselines(), fps=20, clock=Clock(step=0.05),
+                     sleep=lambda s: time.sleep(0.001), baseline_path=tmp_path / "b.json",
+                     baselines_path=tmp_path / "sb.json")
     with qtbot.waitSignal(w.camera_status, timeout=3000) as sig:
         w.start()
     assert sig.args == ["model_failed"]
