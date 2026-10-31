@@ -1,0 +1,78 @@
+<h2>How should it sit on your screen while you work?</h2>
+<p class="subtitle">You're at your desk, working. The app is watching and choosing music. Which of these feels right? (Mix and match is fine.)</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="widget" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1e1e24;border-radius:14px;padding:14px;width:250px;margin:10px auto;color:#eee;font-family:sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#f7c948,#f08a24);display:flex;align-items:center;justify-content:center;font-size:22px">🙂</div>
+          <div>
+            <div style="font-size:13px;font-weight:bold">Content · calm</div>
+            <div style="font-size:11px;opacity:.7">steady for 6 min</div>
+          </div>
+          <div style="margin-left:auto;font-size:10px;background:#2d6a4f;padding:3px 7px;border-radius:10px">Match</div>
+        </div>
+        <div style="margin-top:12px;display:flex;align-items:center;gap:8px">
+          <div style="width:34px;height:34px;background:#555;border-radius:4px"></div>
+          <div style="font-size:11px"><b>Holocene</b><br><span style="opacity:.7">Bon Iver</span></div>
+          <div style="margin-left:auto;font-size:14px">⏮ ⏸ ⏭</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Small floating widget</h3>
+      <p>A small window that stays on top in a corner of your screen. It shows your current mood, the song, and the match/lift switch. Camera preview stays hidden.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="dashboard" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#16161b;border-radius:10px;padding:10px;color:#eee;font-family:sans-serif;font-size:11px">
+        <div style="display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="background:#333;height:90px;border-radius:6px;display:flex;align-items:center;justify-content:center;opacity:.8">📷 camera + face mesh</div>
+            <div style="margin-top:8px">
+              <div>Happy <span style="display:inline-block;background:#f7c948;height:6px;width:60px"></span></div>
+              <div>Neutral <span style="display:inline-block;background:#888;height:6px;width:35px"></span></div>
+              <div>Sad <span style="display:inline-block;background:#4a7bd0;height:6px;width:10px"></span></div>
+              <div>Tired <span style="display:inline-block;background:#9b6bd0;height:6px;width:18px"></span></div>
+            </div>
+          </div>
+          <div style="flex:1">
+            <div style="opacity:.7">Mood over last hour</div>
+            <svg width="100%" height="60" viewBox="0 0 120 60"><polyline points="0,40 15,35 30,42 45,30 60,25 75,28 90,18 105,20 120,15" fill="none" stroke="#f7c948" stroke-width="2"/><polyline points="0,30 15,32 30,38 45,40 60,35 75,30 90,32 105,28 120,30" fill="none" stroke="#4ad0a0" stroke-width="2"/></svg>
+            <div style="font-size:9px;opacity:.7"><span style="color:#f7c948">■</span> positive <span style="color:#4ad0a0">■</span> energy</div>
+            <div style="margin-top:8px;background:#222;padding:6px;border-radius:6px">▶ <b>Holocene</b> · Bon Iver<br><span style="opacity:.6">picked because: calm + positive</span></div>
+            <div style="margin-top:6px">[ Match ] [ Lift ]</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Full dashboard</h3>
+      <p>A normal window with the camera feed, a live emotion breakdown, a mood-over-time graph, and the reason each song was picked. Interesting to watch, but it takes up space.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="tray" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family:sans-serif;color:#eee;padding:10px">
+        <div style="background:#222;padding:6px 10px;border-radius:6px;display:flex;justify-content:flex-end;gap:12px;font-size:12px">🔋 📶 <b>🎵🙂</b> 10:42</div>
+        <div style="background:#2a2a32;margin:8px 0 0 auto;width:200px;border-radius:8px;padding:10px;font-size:11px;box-shadow:0 4px 14px rgba(0,0,0,.4)">
+          <div style="font-weight:bold">Mood shifted → stressed</div>
+          <div style="opacity:.75;margin-top:4px">Lift mode: switching to something calmer after this song.</div>
+          <div style="margin-top:6px;opacity:.6">[Skip] [Keep current vibe]</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. Invisible: tray icon + notifications</h3>
+      <p>No window at all. A small icon in the taskbar or menu bar, plus a short notification when your mood shifts and the music changes. Click the icon for settings.</p>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:20px">My guess: C or A day to day, with B available when you want to dig in. Tell me in the terminal.</p>
