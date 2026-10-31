@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QW
 
 from moodmusic.config import Settings, save_settings
 from moodmusic.ui.common import (BG, BUTTON_CSS, CAMERA_MESSAGES, ArtLabel, DeviceButton,
-                                 LoginButton, ModeToggle, StatusDot, steady_text)
+                                 LoginButton, ModeToggle, StatusDot, media_button,
+                                 set_play_state, steady_text)
 from moodmusic.ui.mood_picker import MoodPicker
 
 
@@ -52,8 +53,9 @@ class MoodWidget(QWidget):
         self.title_label.setStyleSheet("font-size:11px; font-weight:bold;")
         self.artist_label = QLabel("")
         self.artist_label.setStyleSheet("font-size:11px; color:#aaa;")
-        self.prev_btn, self.pause_btn, self.next_btn = (
-            QPushButton("⏮"), QPushButton("⏸"), QPushButton("⏭"))
+        self.prev_btn = media_button("prev", "Previous song")
+        self.pause_btn = media_button("play", "Play")
+        self.next_btn = media_button("next", "Next song")
         song = QHBoxLayout()
         song.addWidget(self.art)
         text = QVBoxLayout()
@@ -108,7 +110,7 @@ class MoodWidget(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        self.pause_btn.setText("⏸" if getattr(self._engine, "is_playing", False) else "▶")
+        set_play_state(self.pause_btn, bool(getattr(self._engine, "is_playing", False)))
         status = self._engine.status
         bad_quality = self._quality is not None and not self._quality.ok
         if bad_quality:

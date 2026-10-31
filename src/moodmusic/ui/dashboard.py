@@ -5,14 +5,15 @@ import logging
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
 from moodmusic.config import HOLD_SECONDS, Settings, save_settings
 from moodmusic.mood.groups import MoodGroup
 from moodmusic.ui.common import (BUTTON_CSS, CAMERA_MESSAGES, ArtLabel, DeviceButton,
-                                 LoginButton, ModeToggle, StatusDot)
+                                 LoginButton, ModeToggle, StatusDot, media_button,
+                                 set_play_state)
 from moodmusic.ui.mood_picker import MoodPicker
 from moodmusic.ui.state_panels import (EMOTION_NAMES, EmotionDeltas, SignalsPanel, StateBars,
                                        StateTimeline)
@@ -25,8 +26,11 @@ POSITIVE, ENERGY = QColor("#f7c948"), QColor("#4ad0a0")
 
 CSS = """
 QWidget { background:#1b1d22; color:#e8e8ea; font-size:12px; }
+QPushButton { background:#30343c; border-radius:9px; padding:4px 10px; }
+QPushButton:hover { background:#3a3f49; }
 QFrame#card { background:#24272e; border-radius:8px; }
-QFrame#card QLabel, QFrame#card QWidget { background:transparent; }
+QFrame#card QLabel { background:transparent; }
+QFrame#card QWidget#modes { background:transparent; }
 QLabel#muted { color:#9aa0aa; font-size:11px; }
 QLabel#state { font-size:24px; font-weight:600; }
 QLabel#song { font-size:14px; font-weight:600; }
@@ -156,7 +160,7 @@ class Dashboard(QWidget):
         self._mood = None
         self.setWindowTitle("Mood Music")
         self.resize(760, 640)
-        self.setStyleSheet(CSS + BUTTON_CSS)
+        self.setStyleSheet(BUTTON_CSS + CSS)
 
         # -- your state ------------------------------------------------------
         state_card, sl = _card()
@@ -192,14 +196,15 @@ class Dashboard(QWidget):
             texts.addWidget(w)
         top.addLayout(texts, 1)
         pl.addLayout(top)
-        self.prev_btn, self.pause_btn, self.next_btn = (
-            QPushButton("⏮"), QPushButton("▶"), QPushButton("⏭"))
+        self.prev_btn = media_button("prev", "Previous song")
+        self.pause_btn = media_button("play", "Play", "#000000")
+        self.next_btn = media_button("next", "Next song")
         controls = QHBoxLayout()
         for btn, name, slot in ((self.prev_btn, "ctrl", engine.previous),
                                 (self.pause_btn, "play", engine.toggle_pause),
                                 (self.next_btn, "ctrl", engine.skip)):
             btn.setObjectName(name)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setIconSize(QSize(22, 22) if name == "play" else QSize(18, 18))
             btn.clicked.connect(lambda _=False, s=slot: s())
             controls.addWidget(btn)
         controls.addStretch(1)
@@ -221,6 +226,7 @@ class Dashboard(QWidget):
         head.addWidget(_muted("How sure it is about each state  ·  "
                               "<span style='color:#f7c948'>│</span> needed to switch"), 1)
         self.mode_toggle = ModeToggle(engine, save)
+        self.mode_toggle.setObjectName("modes")
         head.addWidget(self.mode_toggle)
         bl.addLayout(head)
         self.state_bars = StateBars()
@@ -350,7 +356,8 @@ class Dashboard(QWidget):
             self.reason_label.setText(f"Picked because {pick.reason}")
         self.art.set_url(pick.song.album_art if pick else None)
         self.wrong_btn.setEnabled(pick is not None)
-        self.pause_btn.setText("⏸" if getattr(self._engine, "is_playing", False) else "▶")
+        set_play_state(self.pause_btn, bool(getattr(self._engine, "is_playing", False)),
+                       "#000000")
         self.chart.set_history(self._engine.history)
         self.mode_toggle.refresh()
         self.device_btn.refresh()

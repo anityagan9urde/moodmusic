@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from PySide6.QtCore import QSize, Qt, QUrl
-from PySide6.QtGui import QColor, QCursor, QPainter, QPixmap
+from PySide6.QtCore import QPointF, QSize, Qt, QUrl
+from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPixmap, QPolygonF
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QPushButton, QWidget
 
@@ -32,6 +32,49 @@ QPushButton:disabled { color:#777; }
 QPushButton:checked { background:#2d6a4f; }
 QPushButton#flat { background:transparent; font-size:15px; padding:0 3px; }
 """
+
+
+def media_icon(kind: str, color: str = "#ffffff", size: int = 32) -> QIcon:
+    """Crisp media-control icons ("prev", "next", "play", "pause"); fonts render emoji instead."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+    s = size / 32
+
+    def tri(x0, x1):  # pointing right if x1 > x0
+        p.drawPolygon(QPolygonF([QPointF(x0 * s, 8 * s), QPointF(x1 * s, 16 * s),
+                                 QPointF(x0 * s, 24 * s)]))
+
+    if kind == "play":
+        tri(11, 24)
+    elif kind == "pause":
+        p.drawRoundedRect(int(10 * s), int(8 * s), int(4 * s), int(16 * s), s, s)
+        p.drawRoundedRect(int(18 * s), int(8 * s), int(4 * s), int(16 * s), s, s)
+    elif kind == "next":
+        tri(8, 20)
+        p.drawRect(int(20 * s), int(8 * s), int(3 * s), int(16 * s))
+    elif kind == "prev":
+        tri(24, 12)
+        p.drawRect(int(9 * s), int(8 * s), int(3 * s), int(16 * s))
+    p.end()
+    return QIcon(pm)
+
+
+def set_play_state(button: QPushButton, playing: bool, color: str = "#ffffff") -> None:
+    button.setText("")
+    button.setIcon(media_icon("pause" if playing else "play", color))
+    button.setToolTip("Pause" if playing else "Play")
+
+
+def media_button(kind: str, tooltip: str, color: str = "#ffffff") -> QPushButton:
+    b = QPushButton()
+    b.setIcon(media_icon(kind, color))
+    b.setToolTip(tooltip)
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    return b
 
 
 def steady_text(since: float, now: float) -> str:

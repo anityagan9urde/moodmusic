@@ -74,12 +74,12 @@ def test_now_playing_controls_and_reason(qtbot, engine, worker, pick):
     engine.notify()
     assert "Holocene" in d.song_label.text()
     assert "calm + positive" in d.reason_label.text()
-    assert d.pause_btn.text() == "⏸"
+    assert d.pause_btn.toolTip() == "Pause" and not d.pause_btn.icon().isNull()
     d.prev_btn.click(); d.pause_btn.click(); d.next_btn.click()
     assert engine.calls[-3:] == [("previous",), ("toggle_pause",), ("skip",)]
     engine.is_playing = False
     engine.notify()
-    assert d.pause_btn.text() == "▶"
+    assert d.pause_btn.toolTip() == "Play"
 
 
 def test_settings_chips_show_current_settings(qtbot, engine, worker):

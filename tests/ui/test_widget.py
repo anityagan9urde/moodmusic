@@ -160,7 +160,7 @@ def test_pause_button_reflects_playback(qtbot, engine, worker):
     from moodmusic.ui.widget import MoodWidget
     w = MoodWidget(engine, worker)
     qtbot.addWidget(w)
-    assert w.pause_btn.text() == "▶"
+    assert w.pause_btn.toolTip() == "Play" and not w.pause_btn.icon().isNull()
     engine.is_playing = True
     engine.notify()
-    assert w.pause_btn.text() == "⏸"
+    assert w.pause_btn.toolTip() == "Pause"

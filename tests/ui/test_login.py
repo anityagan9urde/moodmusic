@@ -132,7 +132,7 @@ def test_settings_client_id_change_and_logout_rebuild_service(qtbot, monkeypatch
     d.save()
     assert rebuilt == ["new"]
     d.logout_button.click()
-    assert rebuilt == ["new", "new"] and "Log in to Spotify" in d.note.text()
+    assert rebuilt == ["new", "new"] and "Log in to Spotify" in d.spotify_status.text()
 
 
 def test_settings_keeps_saved_camera_even_if_probe_misses_it(qtbot, monkeypatch):
