@@ -96,6 +96,7 @@ def started(tmp_path, group=MoodGroup.CHILL, **kw):
     """Engine with an initial song playing for `group`."""
     eng, svc, clock = make(tmp_path, **kw)
     eng.on_mood(mood(group))
+    eng.tick()
     uri = svc.names("play")[-1][0]
     svc.pb = pb(uri)
     eng.tick()
@@ -105,6 +106,7 @@ def started(tmp_path, group=MoodGroup.CHILL, **kw):
 def test_initial_start_plays_even_in_wait_mode(tmp_path):
     eng, svc, _ = make(tmp_path, switch_mode="wait")
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert len(svc.names("play")) == 1 and not svc.names("queue")
     assert eng.current_pick.group == MoodGroup.CHILL
     assert eng.status.kind == "ok"
@@ -113,7 +115,9 @@ def test_initial_start_plays_even_in_wait_mode(tmp_path):
 def test_wait_mode_queues_not_plays(tmp_path):
     eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL, switch_mode="wait")
     eng.on_mood(mood(MoodGroup.UPBEAT))
+    eng.tick()
     eng.on_mood(mood(MoodGroup.UPBEAT))
+    eng.tick()
     assert len(svc.names("play")) == 1
     q = svc.names("queue")
     assert len(q) == 1 and q[0][0] in ("u1", "u2")
@@ -129,6 +133,7 @@ def test_wait_mode_queues_not_plays(tmp_path):
 def test_immediate_mode_plays(tmp_path):
     eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL, switch_mode="immediate")
     eng.on_mood(mood(MoodGroup.UPBEAT))
+    eng.tick()
     assert len(svc.names("play")) == 2
     assert svc.names("play")[-1][0] in ("u1", "u2")
     assert not svc.names("queue")
@@ -147,6 +152,7 @@ def test_near_end_queues_next_from_current_target(tmp_path):
 def test_lift_mode_steps_one_group_per_song(tmp_path):
     eng, svc, _ = make(tmp_path, switch_mode="wait", mode="lift")
     eng.on_mood(mood(MoodGroup.MELANCHOLY))
+    eng.tick()
     first = svc.names("play")[0][0]
     assert eng.current_pick.group == MoodGroup.CHILL
     svc.pb = pb(first, progress=199000)
@@ -214,6 +220,7 @@ def test_no_active_device_status_and_no_crash(tmp_path):
     eng, svc, _ = make(tmp_path)
     svc.fail["play"] = [NoActiveDevice("x")]
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert eng.status.kind == "error" and eng.status.message == "Open Spotify on any device"
     eng.tick()  # retries, succeeds, recovers
     assert eng.status.kind == "ok"
@@ -224,6 +231,7 @@ def test_unavailable_retries_next_tick(tmp_path):
     eng, svc, _ = make(tmp_path)
     svc.fail["play"] = [SpotifyUnavailable("x")]
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert eng.status.kind == "warning"
     assert eng.status.message == "Can't reach Spotify. Retrying…"
     eng.tick()
@@ -239,6 +247,7 @@ def test_error_messages(tmp_path, exc, kind, msg):
     eng, svc, _ = make(tmp_path)
     svc.fail["play"] = [exc]
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert (eng.status.kind, eng.status.message) == (kind, msg)
 
 
@@ -246,6 +255,7 @@ def test_unexpected_exception_is_contained(tmp_path):
     eng, svc, _ = make(tmp_path)
     svc.fail["play"] = [RuntimeError("bug")]
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert eng.status.kind == "error"
     assert eng.status.message == "Something went wrong. Retrying…"
     eng.tick()
@@ -255,6 +265,7 @@ def test_unexpected_exception_is_contained(tmp_path):
 def test_no_sorted_songs_warning(tmp_path):
     eng, svc, _ = make(tmp_path, songs=[mk("x", MoodGroup.UNSORTED)])
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert eng.status.kind == "warning"
     assert eng.status.message == "No songs sorted yet. Scanning your playlist…"
     assert not svc.names("play")
@@ -299,6 +310,7 @@ def test_disabled_does_nothing(tmp_path):
     assert not svc.calls
     eng.set_enabled(True)
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert svc.names("play")
 
 
@@ -330,6 +342,7 @@ def test_lift_from_chill_yields_both_chill_and_upbeat(tmp_path):
         (tmp_path / f"s{seed}").mkdir()
         eng, svc, _ = make(tmp_path / f"s{seed}", mode="lift", seed=seed)
         eng.on_mood(mood(MoodGroup.CHILL))
+        eng.tick()
         groups.add(eng.current_pick.group)
     assert groups == {MoodGroup.CHILL, MoodGroup.UPBEAT}
 
@@ -398,6 +411,7 @@ def test_single_device_fallback(tmp_path):
     svc.devs = [Device("d1", "PC", "Computer", False)]
     svc.fail["play"] = [NoActiveDevice("x")]
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert svc.names("play")[-1][1] == "d1" and eng.status.kind == "ok"
     assert eng.current_pick is not None
 
@@ -407,6 +421,7 @@ def test_multiple_devices_choose_then_set_device(tmp_path):
     svc.devs = [Device("d1", "PC", "Computer", False), Device("d2", "Phone", "Phone", False)]
     svc.fail["play"] = [NoActiveDevice("x")]
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert eng.status.message == "Choose a Spotify device"
     svc.fail["play"] = [NoActiveDevice("x")]
     eng.tick()  # status must stay while waiting for a choice
@@ -421,6 +436,7 @@ def test_zero_devices_keeps_open_spotify(tmp_path):
     eng, svc, _ = make(tmp_path)
     svc.fail["play"] = [NoActiveDevice("x")]
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert eng.status.message == "Open Spotify on any device"
 
 
@@ -436,6 +452,7 @@ def test_failed_resume_is_retried(tmp_path):
     eng.tick()
     assert len(svc.names("resume")) == 2
     eng.on_mood(mood(MoodGroup.UPBEAT))
+    eng.tick()
     assert len(svc.names("queue")) == 1  # engine is live again
 
 
@@ -450,12 +467,14 @@ def test_manual_resume_clears_paused_flag(tmp_path):
     eng.tick()
     assert len(svc.names("resume")) == 1
     eng.on_mood(mood(MoodGroup.UPBEAT))
+    eng.tick()
     assert len(svc.names("queue")) == 1
 
 
 def test_orphaned_queue_is_still_ours(tmp_path):
     eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL)
     eng.on_mood(mood(MoodGroup.UPBEAT))
+    eng.tick()
     queued = svc.names("queue")[0][0]
     eng.skip()
     played = svc.names("play")[-1][0]
@@ -465,4 +484,149 @@ def test_orphaned_queue_is_still_ours(tmp_path):
     eng.tick()
     assert eng.current_pick.song.uri == queued
     eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
     assert len(svc.names("play")) == 2  # no back-off took place
+
+
+# ---- C1: no Spotify I/O per camera frame -----------------------------------
+@pytest.mark.parametrize("scenario", ["first_scan", "spotify_closed", "empty_library"])
+def test_on_mood_never_calls_spotify_and_tick_is_bounded(tmp_path, scenario):
+    songs = [] if scenario == "empty_library" else SONGS
+    eng, svc, clock = make(tmp_path, songs=songs)
+    if scenario == "spotify_closed":
+        svc.fail["play"] = [NoActiveDevice("x") for _ in range(200)]
+    for _ in range(80):  # 10 s of frames at 8 fps
+        clock.t += 0.125
+        eng.on_mood(mood(MoodGroup.CHILL))
+    assert svc.calls == []
+    eng.tick()
+    assert len([c for c in svc.calls if c[0] != "devices"]) <= 3
+    assert len(svc.names("devices")) <= 1
+
+
+def test_history_downsampled_to_one_point_per_5s(tmp_path):
+    eng, svc, clock = make(tmp_path)
+    for _ in range(80):
+        clock.t += 0.125
+        eng.on_mood(mood(MoodGroup.CHILL))
+    assert 2 <= len(eng.history) <= 3
+    times = [h[0] for h in eng.history]
+    assert all(b - a >= 5 for a, b in zip(times, times[1:]))
+
+
+def test_rate_limited_backs_off_without_sleeping(tmp_path):
+    from moodmusic.spotify.client import RateLimited
+    eng, svc, clock = make(tmp_path)
+    eng.on_mood(mood(MoodGroup.CHILL))
+    svc.fail["playback"] = [RateLimited("slow", retry_after=30)]
+    eng.tick()
+    assert (eng.status.kind, eng.status.message) == (
+        "warning", "Spotify asked us to slow down. Retrying…")
+    n = len(svc.calls)
+    clock.t += 29
+    eng.tick()
+    eng.skip()
+    eng.toggle_pause()
+    assert len(svc.calls) == n  # nothing reaches Spotify until the deadline
+    clock.t += 2
+    eng.tick()
+    assert len(svc.calls) > n and eng.status.kind == "ok"
+
+
+def test_rate_limit_deadline_is_capped(tmp_path):
+    from moodmusic.spotify.client import RateLimited
+    eng, svc, clock = make(tmp_path)
+    svc.fail["playback"] = [RateLimited("slow", retry_after=999)]
+    eng.tick()
+    n = len(svc.calls)
+    clock.t += 61
+    eng.tick()
+    assert len(svc.calls) > n
+
+
+def test_set_service_swaps_service_and_clears_auth_error(tmp_path):
+    eng, svc, _ = make(tmp_path)
+    svc.fail["playback"] = [AuthRequired("x")]
+    eng.tick()
+    assert eng.status.message == "Spotify login expired. Please log in again"
+    new = FakeService()
+    eng.set_service(new)
+    assert eng.service is new and eng.status.message != "Spotify login expired. Please log in again"
+    eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
+    assert new.names("play") and len(svc.names("playback")) == 1
+
+
+# ---- I1: respect a pause made by the user ----------------------------------
+def test_app_pause_is_not_undone_by_immediate_mood_change(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL, switch_mode="immediate")
+    svc.pb = pb(uri, progress=50000)
+    eng.toggle_pause()
+    assert svc.names("pause")
+    svc.pb = pb(uri, progress=50000, playing=False)
+    eng.on_mood(mood(MoodGroup.UPBEAT))
+    for _ in range(4):
+        eng.tick()
+    assert len(svc.names("play")) == 1 and not svc.names("queue")
+    eng.toggle_pause()  # user resumes: mood-driven switching is live again
+    assert svc.names("resume")
+    svc.pb = pb(uri, progress=52000)
+    eng.tick()
+    eng.tick()
+    assert len(svc.names("play")) == 2
+
+
+def test_spotify_pause_is_respected_until_resumed(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL, switch_mode="immediate")
+    svc.pb = pb(uri, progress=50000, playing=False)  # paused in Spotify
+    eng.tick()
+    eng.on_mood(mood(MoodGroup.UPBEAT))
+    eng.tick()
+    svc.pb = None  # Spotify closed while paused: no R11 restart either
+    for _ in range(5):
+        eng.tick()
+    assert len(svc.names("play")) == 1
+    svc.pb = pb(uri, progress=50000, playing=True)  # resumed in Spotify
+    eng.tick()
+    assert len(svc.names("play")) == 2
+
+
+def test_skip_and_wrong_vibe_still_act_while_paused(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL, switch_mode="immediate")
+    svc.pb = pb(uri, progress=50000, playing=False)
+    eng.tick()
+    eng.skip()
+    assert len(svc.names("play")) == 2
+    svc.pb = pb(svc.names("play")[-1][0], progress=1000, playing=False)
+    eng.tick()
+    eng.tick()
+    eng.wrong_vibe(MoodGroup.MELANCHOLY)
+    assert len(svc.names("play")) == 3
+
+
+# ---- I2: don't pull playback back to a remembered device -------------------
+def test_chosen_device_dropped_once_playback_is_active(tmp_path):
+    eng, svc, _ = make(tmp_path)
+    svc.devs = [Device("d1", "PC", "Computer", False), Device("d2", "Phone", "Phone", False)]
+    svc.fail["play"] = [NoActiveDevice("x")]
+    eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
+    eng.set_device("d2")
+    assert svc.names("play")[-1][1] == "d2"
+    svc.pb = PlaybackInfo(svc.names("play")[-1][0], 1000, 200000, True, "speaker")  # user moved
+    eng.tick()
+    eng.skip()
+    assert svc.names("play")[-1][1] is None
+
+
+def test_single_device_fallback_not_reused_after_active(tmp_path):
+    eng, svc, _ = make(tmp_path)
+    svc.devs = [Device("d1", "PC", "Computer", False)]
+    svc.fail["play"] = [NoActiveDevice("x")]
+    eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
+    assert svc.names("play")[-1][1] == "d1"
+    svc.pb = PlaybackInfo(svc.names("play")[-1][0], 1000, 200000, True, "d1")
+    eng.tick()
+    eng.skip()
+    assert svc.names("play")[-1][1] is None

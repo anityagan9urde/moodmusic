@@ -242,7 +242,8 @@ def run() -> int:
     from moodmusic.vision.emotion import HSEmotionModel
     from moodmusic.vision.face import FaceTracker
 
-    service = SpotifyService(make_spotify(settings.spotify_client_id))
+    # GUI-thread service: never sleeps on 429 (the engine backs off itself).
+    service = SpotifyService(make_spotify(settings.spotify_client_id), retry_429=False)
     library = SongLibrary(data_dir() / "library.db")
     selector = SongSelector(library, random.Random())
     corrections = CorrectionStore(data_dir() / "corrections.jsonl")

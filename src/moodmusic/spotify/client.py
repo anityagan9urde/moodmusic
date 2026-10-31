@@ -14,7 +14,9 @@ from moodmusic.spotify.auth import KeyringCacheHandler, make_auth_manager
 
 log = logging.getLogger(__name__)
 
-MAX_RETRY_AFTER_S = 10
+MAX_RETRY_AFTER_S = 10  # longest sleep when retrying a 429 on a background thread
+RATE_LIMIT_DEFAULT_S = 5  # RateLimited.retry_after when Spotify sends no Retry-After
+RATE_LIMIT_MAX_S = 60
 
 
 class SpotifyError(Exception):
@@ -35,6 +37,15 @@ class NoActiveDevice(SpotifyError):
 
 class SpotifyUnavailable(SpotifyError):
     pass
+
+
+class RateLimited(SpotifyUnavailable):
+    """HTTP 429. `retry_after` is how many seconds to wait before calling again."""
+
+    def __init__(self, message: str = "Spotify asked us to slow down",
+                 retry_after: float = RATE_LIMIT_DEFAULT_S) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -71,19 +82,24 @@ def make_spotify(client_id: str, auth_manager=None) -> spotipy.Spotify:
     )
 
 
-def _retry_after(e: SpotifyException) -> int:
-    raw = (e.headers or {}).get("Retry-After", 1)
+def _retry_after(e: SpotifyException, default: int = 1, cap: int = MAX_RETRY_AFTER_S) -> int:
+    raw = (e.headers or {}).get("Retry-After", default)
     try:
         val = int(float(raw))
     except (TypeError, ValueError):
-        val = 1
-    return max(0, min(val, MAX_RETRY_AFTER_S))
+        val = default
+    return max(0, min(val, cap))
 
 
 class SpotifyService:
-    def __init__(self, sp: spotipy.Spotify, sleep: Callable[[float], None] = time.sleep):
+    """retry_429=True (background threads): sleep Retry-After once and retry.
+    retry_429=False (GUI thread): never sleep; raise RateLimited instead."""
+
+    def __init__(self, sp: spotipy.Spotify, sleep: Callable[[float], None] = time.sleep,
+                 retry_429: bool = True):
         self.sp = sp
         self._sleep = sleep
+        self._retry_429 = retry_429
 
     # ---- error handling -------------------------------------------------
     @staticmethod
@@ -95,6 +111,8 @@ class SpotifyService:
             return NoActiveDevice("No active Spotify device")
         if status == 403 and (reason == "PREMIUM_REQUIRED" or "Premium" in msg):
             return NotPremium("Spotify Premium is required")
+        if status == 429:
+            return RateLimited(retry_after=_retry_after(e, RATE_LIMIT_DEFAULT_S, RATE_LIMIT_MAX_S))
         if isinstance(status, int) and status >= 500:
             return SpotifyUnavailable(f"Spotify is unavailable (HTTP {status})")
         return SpotifyError(f"Spotify request failed (HTTP {status})")
@@ -122,7 +140,7 @@ class SpotifyService:
                     retried = True
                     log.info("Spotify 401; retrying once")
                     continue
-                if not retried and e.http_status == 429:
+                if not retried and e.http_status == 429 and self._retry_429:
                     retried = True
                     self._sleep(_retry_after(e))
                     continue

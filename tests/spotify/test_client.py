@@ -391,3 +391,18 @@ def test_real_spotipy_429_honours_retry_after(stub_server):
     sleeps = []
     assert real_service(stub_server, sleeps).devices() == []
     assert sleeps == [3] and stub_server["hits"] == 2
+
+
+def test_429_without_retry_raises_rate_limited_and_never_sleeps():
+    from moodmusic.spotify.client import RateLimited
+    for headers, expected in (({"Retry-After": "7"}, 7), ({}, 5), ({"Retry-After": "999"}, 60)):
+        sleeps, calls = [], []
+
+        class Sp:
+            def pause_playback(self):
+                calls.append(1)
+                raise SpotifyException(429, -1, "slow down", headers=headers)
+        with pytest.raises(RateLimited) as e:
+            SpotifyService(Sp(), sleep=sleeps.append, retry_429=False).pause()
+        assert e.value.retry_after == expected and sleeps == [] and len(calls) == 1
+        assert isinstance(e.value, SpotifyUnavailable)

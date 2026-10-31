@@ -1,5 +1,7 @@
 """Mood -> music orchestration. Pure logic, no Qt; call only from one thread.
 
+on_mood() only records the latest mood (it runs for every camera frame); all Spotify I/O
+happens in tick() and in explicit user actions. Nothing here ever sleeps.
 Status: "ok" with an empty message when everything is fine.
 """
 from __future__ import annotations
@@ -8,24 +10,28 @@ import functools
 import logging
 import random
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from moodmusic.app.playback_state import RateLimit, UserPause
 from moodmusic.config import Settings
 from moodmusic.mood.groups import Mode, MoodGroup, target_group
 from moodmusic.mood.smoother import MoodState
 from moodmusic.music.selector import Pick, SongSelector
 from moodmusic.spotify.client import (
-    AuthRequired, Device, NoActiveDevice, NotPremium, PlaybackInfo, SpotifyError, SpotifyService,
-    SpotifyUnavailable)
+    AuthRequired, Device, NoActiveDevice, NotPremium, PlaybackInfo, RateLimited, SpotifyError,
+    SpotifyService, SpotifyUnavailable)
 from moodmusic.vision.types import QualityReport
 
 log = logging.getLogger(__name__)
 
 HISTORY_SECONDS = 3600
+HISTORY_STEP_S = 5  # at most one history point per 5 s
 NEAR_END_MS = 3000
 STALE_TICKS = 3
 NO_DEVICE = "Open Spotify on any device"
 CHOOSE_DEVICE = "Choose a Spotify device"
+AUTH_EXPIRED = "Spotify login expired. Please log in again"
+SLOW_DOWN = "Spotify asked us to slow down. Retrying…"
 _FAIL = object()  # sentinel: a Spotify call failed (status already updated)
 
 
@@ -80,6 +86,8 @@ class Engine:
         self._face_lost_at: float | None = None
         self._away_handled = False
         self._paused_by_us = False
+        self._user_pause = UserPause(NEAR_END_MS)
+        self._rate_limit = RateLimit(clock)
         self._err: EngineStatus | None = None
         self._crashed = False
 
@@ -109,12 +117,27 @@ class Engine:
             except Exception:
                 log.exception("Engine listener failed")
 
+    def set_service(self, service: SpotifyService) -> None:
+        """Swap the Spotify client (after login, logout or a Client ID change)."""
+        self.service = service
+        self._rate_limit.reset()
+        self._err = None
+        self._notify()
+
     def _call(self, fn, *args):
-        """Run a Spotify call; on SpotifyError set status and return _FAIL."""
+        """Run a Spotify call; on SpotifyError set status and return _FAIL.
+
+        While Spotify's Retry-After deadline is pending, nothing is sent at all.
+        """
+        if self._rate_limit.blocked():
+            return _FAIL
         try:
             result = fn(*args)
+        except RateLimited as exc:
+            self._rate_limit.hit(exc.retry_after)
+            self._err = EngineStatus("warning", SLOW_DOWN)
         except AuthRequired:
-            self._err = EngineStatus("error", "Spotify login expired. Please log in again")
+            self._err = EngineStatus("error", AUTH_EXPIRED)
         except NotPremium:
             self._err = EngineStatus("error", "Spotify Premium is needed for playback control")
         except NoActiveDevice:
@@ -131,13 +154,20 @@ class Engine:
         return _FAIL
 
     # ---- inputs -------------------------------------------------------
-    @_public
     def on_mood(self, state: MoodState) -> None:
-        now = self._clock()
-        self._mood = state
-        self.history.append((now, state.valence, state.arousal))
-        self.history = [h for h in self.history if now - h[0] <= HISTORY_SECONDS]
-        self._apply_mood()
+        """Called for every camera frame: record only (no Spotify I/O, see tick())."""
+        try:
+            self._mood = state
+            now = self._clock()
+            if self.history and now - self.history[-1][0] < HISTORY_STEP_S:
+                return
+            self.history.append((now, state.valence, state.arousal))
+            while self.history and now - self.history[0][0] > HISTORY_SECONDS:
+                self.history.pop(0)
+        except Exception:
+            log.exception("Engine.on_mood failed")
+            return
+        self._notify()  # at most once per HISTORY_STEP_S
 
     @_public
     def on_quality(self, report: QualityReport) -> None:
@@ -150,6 +180,7 @@ class Engine:
             if self._paused_by_us:
                 if self._call(self.service.resume) is not _FAIL:
                     self._paused_by_us = False
+                    self._user_pause.resumed()
         elif self._face:
             self._face, self._face_lost_at = False, self._clock()
 
@@ -174,16 +205,26 @@ class Engine:
         pb = self._call(self.service.playback)
         if pb is _FAIL:
             return
+        if pb is not None:
+            self._device_id = None  # a device is active: never pull playback away from it
         if self._paused_by_us:
             if self._face:  # retry a failed resume; honour a manual resume in Spotify
-                if (pb is not None and pb.is_playing) or self._call(self.service.resume) is not _FAIL:
+                if pb is not None and pb.is_playing:
                     self._paused_by_us = False
+                elif self._call(self.service.resume) is not _FAIL:
+                    self._paused_by_us = False
+                    self._user_pause.resumed(grace=2)  # this tick and the next
+                    if pb is not None:  # pb predates our resume
+                        pb = replace(pb, is_playing=True)
             if self._paused_by_us:
                 return
         if self._check_away(pb):
             return
+        ours = (pb is not None and pb.uri == self._last_uri and self._manual_uri is None
+                and self.current_pick is not None and pb.uri == self.current_pick.song.uri)
+        self._user_pause.observe(pb, ours, self._seen)
         self._follow_playback(pb)
-        self._apply_mood()
+        self._apply_mood(pb)
 
     def _check_away(self, pb: PlaybackInfo | None) -> bool:
         minutes = self.settings.away_pause_minutes
@@ -239,7 +280,7 @@ class Engine:
                 self._manual_uri = None
                 self._play_next()
         elif (self._queued is None and self._manual_uri is None and self.current_pick is not None
-              and pb.uri == self.current_pick.song.uri
+              and not self._user_pause.active and pb.uri == self.current_pick.song.uri
               and pb.duration_ms - pb.progress_ms <= NEAR_END_MS):
             pick = self._choose()
             if pick is not None and self._call(self.service.queue, pick.song.uri) is not _FAIL:
@@ -249,7 +290,7 @@ class Engine:
     # ---- decisions ----------------------------------------------------
     def _can_act(self) -> bool:
         return (self._enabled and self._mood is not None and self._quality.ok and self._face
-                and not self._paused_by_us)
+                and not self._paused_by_us and not self._user_pause.active)
 
     def _choose(self) -> Pick | None:
         mood = self._mood
@@ -264,6 +305,7 @@ class Engine:
         pick = self._choose()
         if pick is None or not self._start(pick.song.uri):
             return False
+        self._user_pause.resumed()
         self._stale_uri = self._last_uri if self._last_uri != pick.song.uri else None
         self._stale_ticks = STALE_TICKS
         self._last_uri = pick.song.uri
@@ -274,7 +316,11 @@ class Engine:
         return True
 
     def _start(self, uri: str) -> bool:
-        """play() a song; on NoActiveDevice fall back to the only available device."""
+        """play() a song; on NoActiveDevice fall back to the only available device.
+
+        A device id is only passed while no device is active (chosen or fallback device);
+        tick() forgets it once playback reports an active device.
+        """
         if self._call(self.service.play, uri, self._device_id) is not _FAIL:
             return True
         if self._err is None or self._err.message != NO_DEVICE:
@@ -301,17 +347,20 @@ class Engine:
     @_public
     def set_device(self, device_id: str) -> None:
         self._device_id = device_id
-        self._apply_mood()
+        pb = self._call(self.service.playback)
+        if pb is not _FAIL and pb is None and self.current_pick is not None and self._can_act():
+            self._play_next()  # nothing active: start our flow on the chosen device now
+        elif pb is not _FAIL:
+            self._apply_mood(pb)
 
-    def _apply_mood(self) -> None:
+    def _apply_mood(self, pb: PlaybackInfo | None) -> None:
+        """Act on the latest mood. `pb` is this tick's playback (may predate our own play)."""
         if not self._can_act() or self._manual_uri is not None:
             return
         mood = self._mood
         if self.current_pick is None:
-            info = self._call(self.service.playback)
-            if info is _FAIL or (info is not None and info.is_playing):
-                return
-            self._play_next()
+            if pb is None or not pb.is_playing:  # never override music the user started
+                self._play_next()
             return
         if mood.group == self._handled_group:
             return
@@ -348,10 +397,11 @@ class Engine:
         if pb is _FAIL:
             return
         if pb is not None and pb.is_playing:
-            self._call(self.service.pause)
-        else:
-            if self._call(self.service.resume) is not _FAIL:
-                self._paused_by_us = False
+            if self._call(self.service.pause) is not _FAIL:
+                self._user_pause.paused(pb.progress_ms)
+        elif self._call(self.service.resume) is not _FAIL:
+            self._paused_by_us = False
+            self._user_pause.resumed()
 
     @_public
     def wrong_vibe(self, new_group: MoodGroup) -> None:
