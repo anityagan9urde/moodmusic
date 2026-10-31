@@ -24,6 +24,7 @@ class FaceObservation:
     bbox: tuple[int, int, int, int] | None = None
     blendshapes: dict[str, float] = field(default_factory=dict)
     landmarks: np.ndarray | None = None
+    image_size: tuple[int, int] | None = None  # (width, height) in pixels
 
 
 @dataclass(frozen=True)

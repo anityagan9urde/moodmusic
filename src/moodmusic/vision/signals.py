@@ -9,9 +9,9 @@ from moodmusic.vision.types import EmotionReading, FaceObservation
 # MediaPipe FaceMesh indices (subject's right eye is on the image's left).
 EYE_R_OUT, EYE_R_IN, EYE_L_IN, EYE_L_OUT = 33, 133, 362, 263
 NOSE, CHIN, IRIS_R, IRIS_L = 1, 152, 468, 473
+FOREHEAD, BRIDGE = 10, 168  # neither moves with the jaw
 GAZE_ON_LIMIT = 0.35
 YAW_ON_LIMIT_DEG = 25.0
-NEUTRAL_PITCH_RATIO = 0.4  # nose sits ~40% of the way from eye line to chin when level
 
 
 @dataclass(frozen=True)
@@ -46,13 +46,14 @@ def _clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
 
 
 def _head_pose(p) -> tuple[float, float, float]:
+    """Yaw from the nose vs the eye corners; pitch from the forehead-to-nose-bridge line in
+    3D (both rigid, so talking or yawning doesn't move it); roll from the eye line."""
     mid_x = (p[EYE_R_OUT][0] + p[EYE_L_OUT][0]) / 2
-    mid_y = (p[EYE_R_OUT][1] + p[EYE_L_OUT][1]) / 2
     half = abs(p[EYE_L_OUT][0] - p[EYE_R_OUT][0]) / 2
     yaw = math.degrees(math.asin(_clamp((p[NOSE][0] - mid_x) / half))) if half > 1e-6 else 0.0
-    span_y = p[CHIN][1] - mid_y
-    ratio = (p[NOSE][1] - mid_y) / span_y if abs(span_y) > 1e-6 else NEUTRAL_PITCH_RATIO
-    pitch = (NEUTRAL_PITCH_RATIO - ratio) * 150.0
+    up_y = p[BRIDGE][1] - p[FOREHEAD][1]  # > 0 when the forehead is above the bridge
+    dz = p[FOREHEAD][2] - p[BRIDGE][2]  # > 0 when the forehead leans away (chin up)
+    pitch = math.degrees(math.atan2(dz, up_y)) if abs(up_y) > 1e-6 or abs(dz) > 1e-6 else 0.0
     roll = math.degrees(math.atan2(p[EYE_L_OUT][1] - p[EYE_R_OUT][1],
                                    p[EYE_L_OUT][0] - p[EYE_R_OUT][0]))
     return yaw, pitch, roll
@@ -83,8 +84,9 @@ def extract_signals(obs: FaceObservation, reading: EmotionReading | None,
         return FrameSignals()
     b = obs.blendshapes
     p = obs.landmarks
-    if p is not None:  # plain Python floats, so downstream values aren't numpy scalars
-        p = [(float(x), float(y)) for x, y, *_ in p.tolist()]
+    if p is not None:  # pixel units (x, y and z by width), plain floats
+        w, h = obs.image_size or (1, 1)
+        p = [(float(x) * w, float(y) * h, float(z) * w) for x, y, z in p.tolist()]
     yaw, pitch, roll = _head_pose(p) if p is not None and len(p) > CHIN else (0.0, 0.0, 0.0)
     gx, gy = _gaze(p, b)
     jaw, close = b.get("jawOpen", 0.0), b.get("mouthClose", 0.0)

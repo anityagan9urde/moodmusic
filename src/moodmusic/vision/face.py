@@ -54,7 +54,7 @@ class FaceTracker:
         blend = {}
         if result.face_blendshapes and len(result.face_blendshapes) > i:
             blend = {c.category_name: float(c.score) for c in result.face_blendshapes[i]}
-        return FaceObservation(len(faces), (x0, y0, x1 - x0, y1 - y0), blend, pts)
+        return FaceObservation(len(faces), (x0, y0, x1 - x0, y1 - y0), blend, pts, (w, h))
 
     def close(self) -> None:
         self._landmarker.close()
