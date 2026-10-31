@@ -199,6 +199,9 @@ class Engine:
 
     def _follow_playback(self, pb: PlaybackInfo | None) -> None:
         if pb is None:  # Spotify closed or idle: keep trying to resume our own flow
+            if self._stale_ticks > 0:  # just played: give Spotify time to report it
+                self._stale_ticks -= 1
+                return
             if self._last_uri is not None and self._can_act():
                 self._manual_uri = None
                 self._play_next()
@@ -208,7 +211,7 @@ class Engine:
         if pb.uri == self._stale_uri and self._stale_ticks > 0:
             self._stale_ticks -= 1  # Spotify has not caught up with our play() yet
             return
-        self._stale_uri = None
+        self._stale_uri, self._stale_ticks = None, 0
         seen, self._seen = self._seen, (pb.uri, pb.progress_ms, pb.duration_ms)
         near_end = seen is not None and seen[2] - seen[1] <= NEAR_END_MS
         if pb.uri != self._last_uri:

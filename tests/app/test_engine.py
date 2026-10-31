@@ -386,6 +386,11 @@ def test_spotify_closed_retries_and_recovers(tmp_path):
     assert eng.status.message == "Open Spotify on any device"
     eng.tick()
     assert eng.status.kind == "ok" and len(svc.names("play")) == 3
+    for _ in range(3):  # playback still empty within the settle grace: no churn
+        eng.tick()
+    assert len(svc.names("play")) == 3
+    eng.tick()  # grace expired: retry happens
+    assert len(svc.names("play")) == 4
 
 
 def test_single_device_fallback(tmp_path):
