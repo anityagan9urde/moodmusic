@@ -154,8 +154,8 @@ class InteractivePKCE(spotipy.SpotifyPKCE):
         try:
             server = start_local_http_server(redirect_port)
         except OSError:
-            raise LoginError(f"Port {redirect_port} is busy. Close other Mood Music windows "
-                             "and try again.") from None
+            raise LoginError(f"Port {redirect_port} is in use by another program (or another "
+                             "Mood Music window). Close it during login, then try again.") from None
         try:
             server.timeout = POLL_S
             self._open_auth_url()

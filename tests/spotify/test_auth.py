@@ -194,6 +194,18 @@ def test_interactive_login_times_out_and_closes_server(mem_keyring, monkeypatch)
     assert srv2.closed
 
 
+def test_port_in_use_names_another_program(mem_keyring, monkeypatch):
+    def taken(port):
+        raise OSError(10048, "address already in use")
+    opened = []
+    monkeypatch.setattr(auth, "start_local_http_server", taken)
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    with pytest.raises(auth.LoginError) as exc:
+        auth.login_interactive("cid", timeout_s=0.1)
+    assert "8765" in str(exc.value) and "another program" in str(exc.value)
+    assert opened == []  # no browser opened when we can't receive the redirect
+
+
 def test_interactive_login_cancel_abandons_quickly(mem_keyring, monkeypatch):
     srv = FakeServer()
     monkeypatch.setattr(auth, "start_local_http_server", lambda port: srv)
