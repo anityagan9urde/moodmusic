@@ -75,9 +75,10 @@ class ScanThread(QThread):
         super().__init__()
         self._scanner, self._playlist_id, self._stop = scanner, playlist_id, False
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
+        """Ask the scan to stop; True once the thread has actually finished."""
         self._stop = True
-        self.wait(3000)
+        return self.wait(3000)
 
     def run(self) -> None:
         try:
@@ -86,6 +87,14 @@ class ScanThread(QThread):
             log.exception("Library scan failed")
             result = None
         self.finished_with.emit(result)
+
+
+def report_scan(result, notify: Callable[[str, str], None]) -> None:
+    """Surface the outcome of a scan: Scanner's returned error, or a crash (None)."""
+    if result is None:
+        notify("Mood Music", "Library scan failed. See the log for details.")
+    elif result.error:
+        notify("Mood Music", result.error)
 
 
 def _open_dialog(module: str, cls: str, what: str, tray, *args) -> bool:
@@ -144,6 +153,7 @@ def run() -> int:
     from moodmusic.vision.face import FaceTracker
 
     service = SpotifyService(make_spotify(settings.spotify_client_id))
+    scan_service = SpotifyService(make_spotify(settings.spotify_client_id))  # own instance avoids a token-refresh race
     library = SongLibrary(data_dir() / "library.db")
     selector = SongSelector(library, random.Random())
     corrections = CorrectionStore(data_dir() / "corrections.jsonl")
@@ -164,10 +174,12 @@ def run() -> int:
 
     def quit_app() -> None:
         timer.stop()
-        if scan:
-            scan[0].stop()
-        worker.stop()
-        library.close()
+        scan_done = all(t.stop() for t in scan)
+        worker.stop()  # sets the flag and waits up to 2 s, so the camera is released
+        if scan_done:
+            library.close()
+        else:
+            log.warning("Scan thread still running; leaving the library open")
         tray.icon.hide()
         app.quit()
 
@@ -178,8 +190,8 @@ def run() -> int:
     tray = Tray(engine, views, open_settings, quit_app)
     dashboard.settings_requested.connect(open_settings)
     dashboard.review_requested.connect(
-        lambda: _open_dialog("moodmusic.ui.review", "ReviewDialog", "Song review", tray,
-                             library, engine))
+        lambda: _open_dialog("moodmusic.ui.review_dialog", "ReviewDialog", "Song review",
+                             tray, library))
     worker.calibration_done.connect(
         lambda _b: tray.message("Mood Music", "Calibration finished. Thanks!"))
     worker.camera_status.connect(
@@ -200,21 +212,20 @@ def run() -> int:
 
     timer.timeout.connect(tick)
     timer.start(2000)
+    tray.show()
     worker.start()
     if baseline is None:
         worker.start_calibration()
         tray.message("Mood Music", "Calibrating: look at the camera for about 20 seconds.")
 
     def start_scan() -> None:
-        thread = ScanThread(Scanner(service, LastFmClient(settings.lastfm_api_key), library),
+        thread = ScanThread(Scanner(scan_service, LastFmClient(settings.lastfm_api_key), library),
                             settings.source_playlist_id)
-        thread.finished_with.connect(lambda r: r is not None and r.error
-                                     and tray.message("Mood Music", r.error))
+        thread.finished_with.connect(lambda r: report_scan(r, tray.message))
         scan.append(thread)
         thread.start()
 
     start_scan()
-    tray.show()
     views.show_view(settings.view)
     app._moodmusic_refs = (bridge, tray, views)  # keep alive for the event loop
     code = app.exec()
