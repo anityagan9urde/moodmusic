@@ -75,10 +75,21 @@ def test_roundtrip(tmp_path):
     b = Baseline(0.1, -0.2, 1.5)
     save_baseline(b, p)
     assert load_baseline(p) == b
-    assert set(json.loads(p.read_text())) == {"valence", "arousal", "neutral_prob_scale"}
+    assert set(json.loads(p.read_text())) == {"valence", "arousal", "neutral_prob_scale", "probs"}
 
 
 def test_corrupt_file_returns_none(tmp_path):
     p = tmp_path / "baseline.json"
     p.write_text("{nope")
     assert load_baseline(p) is None
+
+
+def test_result_keeps_resting_emotion_probs():
+    b = calibrated(neutral=0.3).result()
+    assert b.probs["neutral"] == pytest.approx(0.3) and b.probs["anger"] == 0.0
+
+
+def test_old_baseline_without_probs_loads_empty():
+    b = Baseline.from_dict({"valence": 0.1, "arousal": 0.0, "neutral_prob_scale": 1.0})
+    assert b.probs == {}
+    assert Baseline.from_dict(b.to_dict()) == b

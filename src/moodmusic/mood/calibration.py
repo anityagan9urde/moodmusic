@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import statistics
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from moodmusic.config import data_dir
@@ -21,8 +21,9 @@ class Baseline:
     valence: float
     arousal: float
     neutral_prob_scale: float
+    probs: dict[str, float] = field(default_factory=dict)  # resting emotion probabilities
 
-    def to_dict(self) -> dict[str, float]:
+    def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
@@ -31,6 +32,7 @@ class Baseline:
             valence=float(d["valence"]),
             arousal=float(d["arousal"]),
             neutral_prob_scale=float(d["neutral_prob_scale"]),
+            probs={str(k): float(v) for k, v in (d.get("probs") or {}).items()},
         )
 
 
@@ -65,6 +67,8 @@ class Calibrator:
             valence=statistics.median(s.valence for s in self._samples),
             arousal=statistics.median(s.arousal for s in self._samples),
             neutral_prob_scale=NEUTRAL_TARGET / max(med_neutral, 0.1),
+            probs={k: statistics.median(s.probs.get(k, 0.0) for s in self._samples)
+                   for k in self._samples[0].probs},
         )
 
 

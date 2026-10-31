@@ -96,6 +96,7 @@ class Engine:
         self._face_lost_at: float | None = None
         self._away_handled = False
         self._paused_by_us = False
+        self.is_playing = False  # last known Spotify state, for play/pause buttons
         self._user_pause = UserPause(NEAR_END_MS)
         self._rate_limit = RateLimit(clock)
         self._err: EngineStatus | None = None
@@ -243,6 +244,7 @@ class Engine:
         pb = self._call(self.service.playback)
         if pb is _FAIL:
             return
+        self.is_playing = pb is not None and pb.is_playing
         if pb is not None:
             self._device_id = None  # a device is active: never pull playback away from it
         if self._paused_by_us:
@@ -458,8 +460,10 @@ class Engine:
             return
         if pb is not None and pb.is_playing:
             if self._call(self.service.pause) is not _FAIL:
+                self.is_playing = False
                 self._user_pause.paused(pb.progress_ms)
         elif self._call(self.service.resume) is not _FAIL:
+            self.is_playing = True
             self._paused_by_us = False
             self._user_pause.resumed()
 

@@ -282,8 +282,20 @@ def test_thread_excepthook_logs(caplog):
 def test_needs_calibration_when_screen_centre_missing():
     from moodmusic.mood.baselines import PersonalBaselines
     from moodmusic.ui.main import needs_calibration
+    from moodmusic.mood.calibration import Baseline
+    old = Baseline(0.0, 0.0, 1.0, {"anger": 0.2})
     b = PersonalBaselines()
     assert needs_calibration(None, b)
-    assert needs_calibration(object(), b)  # upgraded install: old baseline, no screen centre
+    assert needs_calibration(old, b)  # upgraded install: old baseline, no screen centre
     b.screen_center = (0.0, 0.1, 0.0)
-    assert not needs_calibration(object(), b)
+    assert not needs_calibration(old, b)
+
+
+def test_needs_calibration_when_baseline_has_no_resting_emotions():
+    from moodmusic.mood.baselines import PersonalBaselines
+    from moodmusic.mood.calibration import Baseline
+    from moodmusic.ui.main import needs_calibration
+    b = PersonalBaselines()
+    b.screen_center = (0.0, 0.1, 0.0)
+    assert needs_calibration(Baseline(0.0, 0.0, 1.0), b)
+    assert not needs_calibration(Baseline(0.0, 0.0, 1.0, {"anger": 0.2}), b)

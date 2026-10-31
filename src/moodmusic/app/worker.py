@@ -60,6 +60,7 @@ class VisionWorker(QThread):
     calibration_progress = Signal(float)
     calibration_done = Signal(object)
     features_ready = Signal(object)  # Features, for the dashboard's signals panel
+    scores_ready = Signal(object)  # {FaceState: 0-1}, how sure the rules are of each state
 
     def __init__(self, camera_factory, tracker_factory, model_factory,
                  baseline: Baseline | None, state_tracker, corrections,
@@ -260,6 +261,7 @@ class VisionWorker(QThread):
         if self._calibrator is None:
             scores = score_states(f, self._baselines, self._corrections.bias())
             decision = decide(scores, self._state_tracker.state.state)
+            self.scores_ready.emit({s: sc.value for s, sc in scores.items()})
             self.mood.emit(self._state_tracker.update(decision, f, t))
         self.features_ready.emit(f)
         if t >= self._next_save_t:

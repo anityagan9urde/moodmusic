@@ -289,8 +289,9 @@ def start_update_check(on_found: Callable[[str], None], current: str | None = No
 
 
 def needs_calibration(baseline, baselines) -> bool:
-    """Calibrate on first run, and once after upgrading to an install with no screen centre."""
-    return baseline is None or baselines.screen_center is None
+    """Calibrate on first run, and once after an upgrade added data the old calibration lacks
+    (the screen centre, the resting emotion probabilities)."""
+    return (baseline is None or not baseline.probs or baselines.screen_center is None)
 
 
 def run() -> int:

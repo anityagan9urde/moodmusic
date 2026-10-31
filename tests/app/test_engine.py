@@ -744,3 +744,13 @@ def test_play_history_uses_wall_clock(tmp_path):
     eng.tick()
     uri = svc.names("play")[-1][0]
     assert lib.last_played()[uri] == 1_790_000_000.0  # survives reboots (not monotonic)
+
+
+def test_is_playing_follows_playback_and_pause(tmp_path):
+    eng, svc, clock, _ = started(tmp_path)
+    assert eng.is_playing is True
+    eng.toggle_pause()
+    assert eng.is_playing is False
+    svc.pb = None
+    eng.tick()
+    assert eng.is_playing is False

@@ -498,3 +498,19 @@ def test_baselines_not_sampled_during_other_states(qtbot, tmp_path):
     finally:
         w.stop()
     assert not any(b.samples)
+
+
+def test_emits_state_scores_with_each_decision(qtbot, tmp_path):
+    from moodmusic.mood.states import FaceState
+    clock = ManualClock()
+    cam = TickingCamera(clock)
+    w, *_ = make(tmp_path, camera=cam, clock=clock)
+    scores = []
+    w.scores_ready.connect(scores.append)
+    try:
+        w.start()
+        qtbot.waitUntil(lambda: len(scores) >= 2, timeout=3000)
+    finally:
+        w.stop()
+    assert set(scores[-1]) == set(FaceState)
+    assert all(0.0 <= v <= 1.0 for v in scores[-1].values())
