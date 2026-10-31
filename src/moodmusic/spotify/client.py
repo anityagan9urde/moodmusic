@@ -1,0 +1,192 @@
+"""Resilient wrapper around spotipy. The only module that talks to Spotify."""
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+
+import requests
+import spotipy
+from spotipy.exceptions import SpotifyException
+
+from moodmusic.spotify.auth import make_auth_manager
+
+log = logging.getLogger(__name__)
+
+MAX_RETRY_AFTER_S = 10
+
+
+class SpotifyError(Exception):
+    """Generic Spotify failure. Messages never contain tokens."""
+
+
+class NotPremium(SpotifyError):
+    pass
+
+
+class NoActiveDevice(SpotifyError):
+    pass
+
+
+class SpotifyUnavailable(SpotifyError):
+    pass
+
+
+@dataclass(frozen=True)
+class PlaybackInfo:
+    uri: str | None
+    progress_ms: int
+    duration_ms: int
+    is_playing: bool
+    device_id: str | None
+
+
+@dataclass(frozen=True)
+class Device:
+    id: str | None
+    name: str
+    type: str
+    is_active: bool
+
+
+def make_spotify(client_id: str) -> spotipy.Spotify:
+    """Spotify client with spotipy's own retries disabled; _call owns retry policy."""
+    return spotipy.Spotify(
+        auth_manager=make_auth_manager(client_id),
+        requests_timeout=10,
+        retries=0,
+        status_retries=0,
+    )
+
+
+def _retry_after(e: SpotifyException) -> int:
+    raw = (e.headers or {}).get("Retry-After", 1)
+    try:
+        val = int(float(raw))
+    except (TypeError, ValueError):
+        val = 1
+    return max(0, min(val, MAX_RETRY_AFTER_S))
+
+
+class SpotifyService:
+    def __init__(self, sp: spotipy.Spotify, sleep: Callable[[float], None] = time.sleep):
+        self.sp = sp
+        self._sleep = sleep
+
+    # ---- error handling -------------------------------------------------
+    @staticmethod
+    def _map(e: SpotifyException) -> SpotifyError:
+        status = e.http_status
+        msg = str(e.msg or "")
+        reason = str(e.reason or "")
+        if status == 404 and (reason == "NO_ACTIVE_DEVICE" or "No active device" in msg):
+            return NoActiveDevice("No active Spotify device")
+        if status == 403 and (reason == "PREMIUM_REQUIRED" or "Premium" in msg):
+            return NotPremium("Spotify Premium is required")
+        if isinstance(status, int) and status >= 500:
+            return SpotifyUnavailable(f"Spotify is unavailable (HTTP {status})")
+        return SpotifyError(f"Spotify request failed (HTTP {status})")
+
+    def _call(self, fn, *args, **kwargs):
+        retried = False
+        while True:
+            try:
+                return fn(*args, **kwargs)
+            except (requests.ConnectionError, requests.Timeout) as e:
+                raise SpotifyUnavailable("Cannot reach Spotify") from e
+            except SpotifyException as e:
+                if not retried and e.http_status == 401:
+                    retried = True
+                    log.info("Spotify 401; retrying once")
+                    continue
+                if not retried and e.http_status == 429:
+                    retried = True
+                    self._sleep(_retry_after(e))
+                    continue
+                raise self._map(e) from None
+
+    # ---- queries --------------------------------------------------------
+    def check_premium(self) -> None:
+        me = self._call(self.sp.me)
+        if (me or {}).get("product") != "premium":
+            raise NotPremium("Spotify Premium is required")
+
+    def _pages(self, first: dict | None) -> Iterator[dict]:
+        page = first
+        while page:
+            yield page
+            page = self._call(self.sp.next, page) if page.get("next") else None
+
+    def playlists(self) -> list[tuple[str, str, int]]:
+        first = self._call(self.sp.current_user_playlists, limit=50)
+        out = []
+        for page in self._pages(first):
+            for p in page.get("items") or []:
+                if not p:
+                    continue
+                total = (p.get("tracks") or {}).get("total", 0)
+                out.append((p["id"], p.get("name", ""), total))
+        return out
+
+    def iter_source_tracks(
+        self, playlist_id: str | None
+    ) -> Iterator[tuple[str, str, str, str | None]]:
+        """Yield (uri, title, "A, B", art_url). Liked Songs when playlist_id is None.
+
+        art_url is the first album image (Spotify lists the largest first).
+        """
+        if playlist_id is None:
+            first = self._call(self.sp.current_user_saved_tracks, limit=50)
+        else:
+            first = self._call(
+                self.sp.playlist_items, playlist_id, limit=50, additional_types=("track",)
+            )
+        for page in self._pages(first):
+            for item in page.get("items") or []:
+                t = (item or {}).get("track")
+                if not t or t.get("is_local") or t.get("type") != "track" or not t.get("uri"):
+                    continue
+                artists = ", ".join(a.get("name", "") for a in t.get("artists") or [])
+                images = (t.get("album") or {}).get("images") or []
+                art = images[0].get("url") if images else None
+                yield t["uri"], t.get("name", ""), artists, art
+
+    def devices(self) -> list[Device]:
+        r = self._call(self.sp.devices) or {}
+        return [
+            Device(d.get("id"), d.get("name", ""), d.get("type", ""), bool(d.get("is_active")))
+            for d in r.get("devices") or []
+        ]
+
+    def playback(self) -> PlaybackInfo | None:
+        r = self._call(self.sp.current_playback)
+        if not r:
+            return None
+        item = r.get("item") or {}
+        return PlaybackInfo(
+            uri=item.get("uri"),
+            progress_ms=r.get("progress_ms") or 0,
+            duration_ms=item.get("duration_ms") or 0,
+            is_playing=bool(r.get("is_playing")),
+            device_id=(r.get("device") or {}).get("id"),
+        )
+
+    # ---- commands -------------------------------------------------------
+    def play(self, uri: str, device_id: str | None = None) -> None:
+        self._call(self.sp.start_playback, device_id=device_id, uris=[uri])
+
+    def queue(self, uri: str) -> None:
+        self._call(self.sp.add_to_queue, uri, device_id=None)
+
+    def pause(self) -> None:
+        self._call(self.sp.pause_playback)
+
+    def resume(self) -> None:
+        self._call(self.sp.start_playback)
+
+    def next(self) -> None:
+        self._call(self.sp.next_track)
+
+    def previous(self) -> None:
+        self._call(self.sp.previous_track)
