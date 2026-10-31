@@ -9,14 +9,16 @@ from __future__ import annotations
 import functools
 import logging
 import random
+from datetime import datetime
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from moodmusic.app.playback_state import RateLimit, UserPause
 from moodmusic.config import Settings
-from moodmusic.mood.groups import MoodGroup, target_group
-from moodmusic.mood.intent import Mode
-from moodmusic.mood.smoother import MoodState
+from moodmusic.mood.groups import MoodGroup
+from moodmusic.mood.intent import Intent, Mode, intent_for
+from moodmusic.mood.states import FaceState
+from moodmusic.mood.tracker import FaceMood
 from moodmusic.music.selector import Pick, SongSelector
 from moodmusic.spotify.client import (
     AuthRequired, Device, NoActiveDevice, NotPremium, PlaybackInfo, RateLimited, SpotifyError,
@@ -59,21 +61,25 @@ def _public(fn):
 class Engine:
     def __init__(self, service: SpotifyService, selector: SongSelector, settings: Settings,
                  clock: Callable[[], float], rng: random.Random,
-                 force_mood: Callable[[MoodGroup], None] | None = None) -> None:
+                 force_mood: Callable[[FaceState], None] | None = None,
+                 hour_fn: Callable[[], int] | None = None) -> None:
         self.service = service
         self.selector = selector
         self.settings = settings
         self._clock = clock
         self._rng = rng
         self._force_mood = force_mood
+        self._hour = hour_fn or (lambda: datetime.now().hour)
         self.listeners: list[Callable[[], None]] = []
         self.history: list[tuple[float, float, float]] = []
         self.current_pick: Pick | None = None
         self._mode = Mode(settings.mode)
         self._enabled = True
-        self._mood: MoodState | None = None
+        self._mood: FaceMood | None = None
         self._quality = QualityReport(True)
-        self._handled_group: MoodGroup | None = None  # mood group we last acted on
+        self._handled_state: FaceState | None = None  # face state we last acted on
+        self._lift_state: FaceState | None = None  # state the lift steps belong to
+        self._lift_step = 0
         self._queued: Pick | None = None
         self._ours: dict[str, Pick] = {}  # queued picks (incl. orphaned) expected to arrive
         self._seen: tuple[str, int, int] | None = None  # (uri, progress, duration) last tick
@@ -181,9 +187,11 @@ class Engine:
             log.info("engine status: %s", self._err or "ok")
 
     # ---- inputs -------------------------------------------------------
-    def on_mood(self, state: MoodState) -> None:
+    def on_mood(self, state: FaceMood) -> None:
         """Called for every camera frame: record only (no Spotify I/O, see tick())."""
         try:
+            if state.state != self._lift_state:  # any state change restarts the lift
+                self._lift_state, self._lift_step = state.state, 0
             self._mood = state
             now = self._clock()
             if self.history and now - self.history[-1][0] < HISTORY_STEP_S:
@@ -220,9 +228,9 @@ class Engine:
         self._enabled = enabled
 
     @_public
-    def not_how_i_feel(self, group: MoodGroup) -> None:
+    def not_how_i_feel(self, state: FaceState) -> None:
         if self._force_mood is not None:
-            self._force_mood(group)
+            self._force_mood(state)
 
     # ---- periodic -----------------------------------------------------
     @_public
@@ -321,14 +329,31 @@ class Engine:
         return (self._enabled and self._mood is not None and self._quality.ok and self._face
                 and not self._paused_by_us and not self._user_pause.active)
 
+    def _intent(self, mood: FaceMood) -> Intent:
+        """Music for the current state; lift steps restart whenever the state changes."""
+        if mood.state != self._lift_state:
+            self._lift_state, self._lift_step = mood.state, 0
+        intent = intent_for(mood.state, self._mode, self._lift_step, self._hour(), self._rng)
+        self._target = intent.groups[0]
+        return intent
+
+    def _pick_for(self, mood: FaceMood, intent: Intent) -> Pick | None:
+        pick = self.selector.pick(intent.groups, mood, fresh=intent.fresh, now=self._clock())
+        if pick is not None and intent.note:
+            pick.reason += " — " + intent.note
+        return pick
+
     def _choose(self) -> Pick | None:
         mood = self._mood
         if mood is None:
             if self.current_pick is None:
                 return None
-            mood = MoodState(self.current_pick.group)
-        self._target = target_group(mood.group, self._mode, self._rng)
-        return self.selector.pick([self._target], mood, now=self._clock())
+            mood = FaceMood()
+        intent = self._intent(mood)
+        pick = self._pick_for(mood, intent)
+        if pick is not None and intent.lifting:
+            self._lift_step += 1  # one lift step per song
+        return pick
 
     def _play_next(self) -> bool:
         pick = self._choose()
@@ -342,7 +367,7 @@ class Engine:
         self._last_uri = pick.song.uri
         self.current_pick, self._queued, self._manual_uri = pick, None, None
         self._seen = None
-        self._handled_group = self._mood.group if self._mood else None
+        self._handled_state = self._mood.state if self._mood else None
         self.selector.mark_played(pick.song.uri, self._clock())
         return True
 
@@ -393,21 +418,22 @@ class Engine:
             if pb is None or not pb.is_playing:  # never override music the user started
                 self._play_next()
             return
-        if mood.group == self._handled_group:
+        if mood.state == self._handled_state:
             return
-        pick_now = self.current_pick
-        target = self._target = target_group(mood.group, self._mode, self._rng)
-        if target == pick_now.group:
-            self._handled_group = mood.group
+        intent = self._intent(mood)
+        if self.current_pick.group in intent.groups and not intent.fresh:
+            self._handled_state = mood.state  # what's playing already fits
         elif self._mode_immediate():
             self._play_next()
         elif self._queued is None:
-            pick = self.selector.pick([target], mood, now=self._clock())
+            pick = self._pick_for(mood, intent)
             if pick is not None and self._call(self.service.queue, pick.song.uri) is not _FAIL:
-                self._queued, self._handled_group = pick, mood.group
+                self._queued, self._handled_state = pick, mood.state
                 self._ours[pick.song.uri] = pick
+                if intent.lifting:
+                    self._lift_step += 1
         else:
-            self._handled_group = mood.group
+            self._handled_state = mood.state
 
     def _mode_immediate(self) -> bool:
         return self.settings.switch_mode == "immediate"

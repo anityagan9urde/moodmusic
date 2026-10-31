@@ -5,7 +5,8 @@ import pytest
 from moodmusic.app.engine import Engine
 from moodmusic.config import Settings
 from moodmusic.mood.groups import MoodGroup
-from moodmusic.mood.smoother import MoodState
+from moodmusic.mood.states import FaceState
+from moodmusic.mood.tracker import FaceMood
 from moodmusic.music.library import Song, SongLibrary
 from moodmusic.music.selector import SongSelector
 from moodmusic.spotify.client import (
@@ -68,8 +69,16 @@ def mk(uri, group):
     return Song(uri, "T" + uri, "A", None, group, [], "track", False)
 
 
-def mood(group, t=0.0, v=0.0, a=0.0):
-    return MoodState(group, t, v, a, {}, None)
+# Old tests were written in song groups; each maps to the face state whose first pick
+# lands in that group (Stressed lifts from Chill; Sad matches Melancholy in Match mode).
+_STATE_FOR = {MoodGroup.UPBEAT: FaceState.HAPPY, MoodGroup.MELANCHOLY: FaceState.SAD,
+              MoodGroup.FOCUS: FaceState.FOCUSED, MoodGroup.CHILL: FaceState.STRESSED,
+              MoodGroup.INTENSE: FaceState.EXCITED}
+
+
+def mood(state, t=0.0, v=0.0, a=0.0):
+    state = _STATE_FOR.get(state, state)
+    return FaceMood(state, t, "", v, a, {}, None)
 
 
 def pb(uri, progress=0, duration=200000, playing=True):
@@ -80,7 +89,8 @@ SONGS = [mk("c1", MoodGroup.CHILL), mk("c2", MoodGroup.CHILL), mk("u1", MoodGrou
          mk("u2", MoodGroup.UPBEAT), mk("m1", MoodGroup.MELANCHOLY), mk("f1", MoodGroup.FOCUS)]
 
 
-def make(tmp_path, switch_mode="wait", mode="match", songs=SONGS, away=10, force=None, seed=2):
+def make(tmp_path, switch_mode="wait", mode="match", songs=SONGS, away=10, force=None, seed=2,
+         hour_fn=lambda: 14):
     lib = SongLibrary(tmp_path / "l.db")
     for s in songs:
         lib.upsert(s)
@@ -88,7 +98,7 @@ def make(tmp_path, switch_mode="wait", mode="match", songs=SONGS, away=10, force
     clock = Clock()
     settings = Settings(switch_mode=switch_mode, mode=mode, away_pause_minutes=away)
     sel = SongSelector(lib, random.Random(1))
-    eng = Engine(svc, sel, settings, clock, random.Random(seed), force)
+    eng = Engine(svc, sel, settings, clock, random.Random(seed), force, hour_fn=hour_fn)
     return eng, svc, clock
 
 
@@ -336,15 +346,14 @@ def test_listeners_called_and_failures_contained(tmp_path):
     assert seen
 
 
-def test_lift_from_chill_yields_both_chill_and_upbeat(tmp_path):
-    groups = set()
-    for seed in range(30):
+def test_stressed_lift_starts_at_chill_every_time(tmp_path):
+    # The old random Chill->Upbeat jump is gone: lifts climb one step per song instead.
+    for seed in range(10):
         (tmp_path / f"s{seed}").mkdir()
         eng, svc, _ = make(tmp_path / f"s{seed}", mode="lift", seed=seed)
-        eng.on_mood(mood(MoodGroup.CHILL))
+        eng.on_mood(mood(FaceState.STRESSED))
         eng.tick()
-        groups.add(eng.current_pick.group)
-    assert groups == {MoodGroup.CHILL, MoodGroup.UPBEAT}
+        assert eng.current_pick.group == MoodGroup.CHILL
 
 
 def test_second_manual_pick_is_not_overridden(tmp_path):
@@ -630,3 +639,95 @@ def test_single_device_fallback_not_reused_after_active(tmp_path):
     eng.tick()
     eng.skip()
     assert svc.names("play")[-1][1] is None
+
+
+# ---- face states -> music intent ------------------------------------------------
+STATE_SONGS = [mk("f1", MoodGroup.FOCUS), mk("p1", MoodGroup.PROFOUND),
+               mk("r1", MoodGroup.ROMANTIC), mk("r2", MoodGroup.ROMANTIC),
+               mk("c1", MoodGroup.CHILL), mk("c2", MoodGroup.CHILL),
+               mk("u1", MoodGroup.UPBEAT), mk("u2", MoodGroup.UPBEAT),
+               mk("y1", MoodGroup.PARTY), mk("y2", MoodGroup.PARTY)]
+GROUP_OF = {s.uri: s.group for s in STATE_SONGS}
+
+
+def _end_song(eng, svc):
+    """Finish the current song (Spotify stops at its end) and let the engine pick the next."""
+    uri = svc.names("play")[-1][0]
+    svc.pb = pb(uri, progress=199000, duration=200000)
+    eng.tick()
+    svc.pb = pb(uri, progress=200000, duration=200000, playing=False)
+    eng.tick()
+    return svc.names("play")[-1][0]
+
+
+def test_focused_state_plays_focus_group(tmp_path):
+    eng, svc, _ = make(tmp_path, songs=STATE_SONGS)
+    eng.on_mood(mood(FaceState.FOCUSED))
+    eng.tick()
+    assert GROUP_OF[svc.names("play")[-1][0]] == MoodGroup.FOCUS
+
+
+def test_deep_thought_plays_profound(tmp_path):
+    eng, svc, _ = make(tmp_path, songs=STATE_SONGS)
+    eng.on_mood(mood(FaceState.DEEP_THOUGHT))
+    eng.tick()
+    assert GROUP_OF[svc.names("play")[-1][0]] == MoodGroup.PROFOUND
+
+
+def test_tired_lift_advances_one_step_per_song_and_resets_on_state_change(tmp_path):
+    eng, svc, _ = make(tmp_path, songs=STATE_SONGS)  # Match mode: Tired still lifts
+    eng.on_mood(mood(FaceState.TIRED))
+    eng.tick()
+    first = svc.names("play")[-1][0]
+    assert GROUP_OF[first] in (MoodGroup.ROMANTIC, MoodGroup.CHILL)
+    second = _end_song(eng, svc)
+    assert GROUP_OF[second] in (MoodGroup.CHILL, MoodGroup.UPBEAT)
+    third = _end_song(eng, svc)
+    assert GROUP_OF[third] == MoodGroup.UPBEAT
+    eng.on_mood(mood(FaceState.STRESSED, t=5))  # new state: lift restarts at its first step
+    eng.on_mood(mood(FaceState.TIRED, t=6))
+    fourth = _end_song(eng, svc)
+    assert GROUP_OF[fourth] in (MoodGroup.ROMANTIC, MoodGroup.CHILL)
+
+
+def test_bored_requests_fresh(tmp_path):
+    eng, svc, _ = make(tmp_path, songs=STATE_SONGS)
+    eng.selector.library.record_play("u1", 1.0)
+    eng.selector.library.record_play("y1", 2.0)
+    eng.on_mood(mood(FaceState.BORED))
+    eng.tick()
+    uri = svc.names("play")[-1][0]
+    assert uri in ("u2", "y2")  # never-played energetic songs first
+    assert "haven't heard in a while" in eng.current_pick.reason
+
+
+def test_sleepy_night_decided_at_selection_not_midsong(tmp_path):
+    hour = [20]
+    eng, svc, _ = make(tmp_path, songs=STATE_SONGS, switch_mode="immediate",
+                       hour_fn=lambda: hour[0])
+    eng.on_mood(mood(FaceState.SLEEPY))
+    eng.tick()
+    first = svc.names("play")[-1][0]
+    assert GROUP_OF[first] == MoodGroup.UPBEAT  # 20:00 is day: waking you up
+    svc.pb = pb(first, progress=60000)
+    hour[0] = 21
+    eng.tick()
+    eng.tick()
+    assert svc.names("play")[-1][0] == first and svc.names("queue") == []  # no mid-song switch
+    nxt = _end_song(eng, svc)
+    assert GROUP_OF[nxt] in (MoodGroup.CHILL, MoodGroup.PROFOUND)  # night: winding down
+    assert "winding down" in eng.current_pick.reason
+
+
+def test_reason_includes_intent_note(tmp_path):
+    eng, svc, _ = make(tmp_path, songs=STATE_SONGS)
+    eng.on_mood(mood(FaceState.STRESSED))
+    eng.tick()
+    assert eng.current_pick.reason.endswith(" — lifting you up")
+
+
+def test_not_how_i_feel_forwards_face_state(tmp_path):
+    got = []
+    eng, _, _ = make(tmp_path, force=got.append)
+    eng.not_how_i_feel(FaceState.LOVE)
+    assert got == [FaceState.LOVE]
