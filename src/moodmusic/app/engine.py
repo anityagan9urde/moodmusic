@@ -14,7 +14,8 @@ from dataclasses import dataclass, replace
 
 from moodmusic.app.playback_state import RateLimit, UserPause
 from moodmusic.config import Settings
-from moodmusic.mood.groups import Mode, MoodGroup, target_group
+from moodmusic.mood.groups import MoodGroup, target_group
+from moodmusic.mood.intent import Mode
 from moodmusic.mood.smoother import MoodState
 from moodmusic.music.selector import Pick, SongSelector
 from moodmusic.spotify.client import (

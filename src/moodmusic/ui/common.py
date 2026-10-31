@@ -10,7 +10,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QPushButton, QWidget
 
 from moodmusic.config import Settings, save_settings
-from moodmusic.mood.groups import Mode
+from moodmusic.mood.intent import Mode
 
 log = logging.getLogger(__name__)
 

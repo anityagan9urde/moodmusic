@@ -1,7 +1,7 @@
 import random
 
+from moodmusic.mood.intent import Mode
 from moodmusic.mood.groups import (
-    Mode,
     MoodGroup,
     classify,
     lift_target,

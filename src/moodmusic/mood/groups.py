@@ -58,11 +58,6 @@ GROUP_CENTRES: dict[MoodGroup, tuple[float, float]] = {
 }
 
 
-class Mode(str, Enum):
-    MATCH = "match"
-    LIFT = "lift"
-
-
 _NEAREST = {  # intent-ordered fallback between song groups
     MoodGroup.FOCUS: [MoodGroup.CHILL, MoodGroup.PROFOUND, MoodGroup.ROMANTIC, MoodGroup.UPBEAT, MoodGroup.MELANCHOLY, MoodGroup.PARTY, MoodGroup.INTENSE],
     MoodGroup.PROFOUND: [MoodGroup.MELANCHOLY, MoodGroup.CHILL, MoodGroup.FOCUS, MoodGroup.ROMANTIC, MoodGroup.UPBEAT, MoodGroup.INTENSE, MoodGroup.PARTY],
@@ -98,10 +93,10 @@ def lift_target(current: MoodGroup, rng: random.Random) -> MoodGroup:
     return current
 
 
-def target_group(current: MoodGroup, mode: Mode, rng: random.Random) -> MoodGroup:
+def target_group(current: MoodGroup, mode, rng: random.Random) -> MoodGroup:
     if current == MoodGroup.UNSORTED:
         return MoodGroup.FOCUS
-    if mode == Mode.LIFT:
+    if mode == "lift":  # Mode is a str enum (moodmusic.mood.intent)
         return lift_target(current, rng)
     return current
 

@@ -1,7 +1,8 @@
 from PySide6.QtGui import QColor
 
 from moodmusic.app.engine import EngineStatus
-from moodmusic.mood.groups import Mode, MoodGroup
+from moodmusic.mood.groups import MoodGroup
+from moodmusic.mood.intent import Mode
 from moodmusic.mood.smoother import MoodState
 from moodmusic.spotify.client import Device
 from moodmusic.ui import mood_picker
