@@ -9,7 +9,7 @@ from moodmusic.mood.smoother import MoodState
 from moodmusic.music.library import Song, SongLibrary
 from moodmusic.music.selector import SongSelector
 from moodmusic.spotify.client import (
-    AuthRequired, NoActiveDevice, NotPremium, PlaybackInfo, SpotifyError, SpotifyUnavailable)
+    AuthRequired, NoActiveDevice, NotPremium, Device, PlaybackInfo, SpotifyError, SpotifyUnavailable)
 from moodmusic.vision.types import QualityReport
 
 
@@ -17,6 +17,7 @@ class FakeService:
     def __init__(self):
         self.calls = []
         self.pb = None
+        self.devs = []
         self.fail = {}  # method -> list of exceptions raised one per call
 
     def _do(self, name, *args):
@@ -30,7 +31,11 @@ class FakeService:
         return self.pb
 
     def play(self, uri, device_id=None):
-        self._do("play", uri)
+        self._do("play", uri, device_id)
+
+    def devices(self):
+        self._do("devices")
+        return self.devs
 
     def queue(self, uri):
         self._do("queue", uri)
@@ -75,7 +80,7 @@ SONGS = [mk("c1", MoodGroup.CHILL), mk("c2", MoodGroup.CHILL), mk("u1", MoodGrou
          mk("u2", MoodGroup.UPBEAT), mk("m1", MoodGroup.MELANCHOLY), mk("f1", MoodGroup.FOCUS)]
 
 
-def make(tmp_path, switch_mode="wait", mode="match", songs=SONGS, away=10, force=None):
+def make(tmp_path, switch_mode="wait", mode="match", songs=SONGS, away=10, force=None, seed=2):
     lib = SongLibrary(tmp_path / "l.db")
     for s in songs:
         lib.upsert(s)
@@ -83,7 +88,7 @@ def make(tmp_path, switch_mode="wait", mode="match", songs=SONGS, away=10, force
     clock = Clock()
     settings = Settings(switch_mode=switch_mode, mode=mode, away_pause_minutes=away)
     sel = SongSelector(lib, random.Random(1))
-    eng = Engine(svc, sel, settings, clock, random.Random(2), force)
+    eng = Engine(svc, sel, settings, clock, random.Random(seed), force)
     return eng, svc, clock
 
 
@@ -317,3 +322,142 @@ def test_listeners_called_and_failures_contained(tmp_path):
     eng.listeners.extend([bad, lambda: seen.append(1)])
     eng.on_mood(mood(MoodGroup.CHILL))
     assert seen
+
+
+def test_lift_from_chill_yields_both_chill_and_upbeat(tmp_path):
+    groups = set()
+    for seed in range(30):
+        (tmp_path / f"s{seed}").mkdir()
+        eng, svc, _ = make(tmp_path / f"s{seed}", mode="lift", seed=seed)
+        eng.on_mood(mood(MoodGroup.CHILL))
+        groups.add(eng.current_pick.group)
+    assert groups == {MoodGroup.CHILL, MoodGroup.UPBEAT}
+
+
+def test_second_manual_pick_is_not_overridden(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL)
+    svc.pb = pb("A", progress=10000)
+    eng.tick()
+    svc.pb = pb("B", progress=5000)  # user switched mid-song
+    eng.tick()
+    eng.tick()
+    assert len(svc.names("play")) == 1
+    svc.pb = pb("B", progress=199000)
+    eng.tick()
+    svc.pb = pb("autoplay", progress=0)
+    eng.tick()
+    assert len(svc.names("play")) == 2
+
+
+def test_stopped_after_song_end_restarts(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL)
+    svc.pb = pb(uri, progress=100000, playing=False)  # user paused mid-song
+    eng.tick()
+    assert len(svc.names("play")) == 1
+    svc.pb = pb(uri, progress=199500, playing=False)
+    eng.tick()
+    assert len(svc.names("play")) == 2
+
+
+def test_stopped_reset_progress_restarts(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL)
+    svc.pb = pb(uri, progress=198000)
+    eng.tick()
+    svc.fail["queue"] = [SpotifyUnavailable("x")]
+    svc.pb = pb(uri, progress=0, playing=False)
+    eng.tick()
+    assert len(svc.names("play")) == 2
+
+
+def test_manual_song_end_then_stopped_clears_backoff(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL)
+    svc.pb = pb("A", progress=199000)
+    eng.tick()
+    svc.pb = pb("A", progress=199800, playing=False)
+    eng.tick()
+    assert len(svc.names("play")) == 2
+
+
+def test_spotify_closed_retries_and_recovers(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL)
+    svc.pb = None
+    svc.fail["play"] = [NoActiveDevice("x")]
+    eng.tick()
+    assert eng.status.message == "Open Spotify on any device"
+    eng.tick()
+    assert eng.status.kind == "ok" and len(svc.names("play")) == 3
+
+
+def test_single_device_fallback(tmp_path):
+    eng, svc, _ = make(tmp_path)
+    svc.devs = [Device("d1", "PC", "Computer", False)]
+    svc.fail["play"] = [NoActiveDevice("x")]
+    eng.on_mood(mood(MoodGroup.CHILL))
+    assert svc.names("play")[-1][1] == "d1" and eng.status.kind == "ok"
+    assert eng.current_pick is not None
+
+
+def test_multiple_devices_choose_then_set_device(tmp_path):
+    eng, svc, _ = make(tmp_path)
+    svc.devs = [Device("d1", "PC", "Computer", False), Device("d2", "Phone", "Phone", False)]
+    svc.fail["play"] = [NoActiveDevice("x")]
+    eng.on_mood(mood(MoodGroup.CHILL))
+    assert eng.status.message == "Choose a Spotify device"
+    svc.fail["play"] = [NoActiveDevice("x")]
+    eng.tick()  # status must stay while waiting for a choice
+    assert eng.status.message == "Choose a Spotify device"
+    assert [d.id for d in eng.available_devices()] == ["d1", "d2"]
+    eng.set_device("d2")
+    assert svc.names("play")[-1][1] == "d2" and eng.current_pick is not None
+    assert eng.status.kind == "ok"
+
+
+def test_zero_devices_keeps_open_spotify(tmp_path):
+    eng, svc, _ = make(tmp_path)
+    svc.fail["play"] = [NoActiveDevice("x")]
+    eng.on_mood(mood(MoodGroup.CHILL))
+    assert eng.status.message == "Open Spotify on any device"
+
+
+def test_failed_resume_is_retried(tmp_path):
+    eng, svc, clock, uri = started(tmp_path, MoodGroup.CHILL, away=10)
+    eng.on_face_present(False)
+    clock.t += 700
+    eng.tick()
+    assert len(svc.names("pause")) == 1
+    svc.pb = pb(uri, progress=50000, playing=False)
+    svc.fail["resume"] = [SpotifyUnavailable("x")]
+    eng.on_face_present(True)
+    eng.tick()
+    assert len(svc.names("resume")) == 2
+    eng.on_mood(mood(MoodGroup.UPBEAT))
+    assert len(svc.names("queue")) == 1  # engine is live again
+
+
+def test_manual_resume_clears_paused_flag(tmp_path):
+    eng, svc, clock, uri = started(tmp_path, MoodGroup.CHILL, away=10)
+    eng.on_face_present(False)
+    clock.t += 700
+    eng.tick()
+    svc.fail["resume"] = [SpotifyUnavailable("x")]
+    eng.on_face_present(True)
+    svc.pb = pb(uri, playing=True)
+    eng.tick()
+    assert len(svc.names("resume")) == 1
+    eng.on_mood(mood(MoodGroup.UPBEAT))
+    assert len(svc.names("queue")) == 1
+
+
+def test_orphaned_queue_is_still_ours(tmp_path):
+    eng, svc, _, uri = started(tmp_path, MoodGroup.CHILL)
+    eng.on_mood(mood(MoodGroup.UPBEAT))
+    queued = svc.names("queue")[0][0]
+    eng.skip()
+    played = svc.names("play")[-1][0]
+    svc.pb = pb(played)
+    eng.tick()
+    svc.pb = pb(queued)  # Spotify plays the orphaned queue entry
+    eng.tick()
+    assert eng.current_pick.song.uri == queued
+    eng.on_mood(mood(MoodGroup.CHILL))
+    assert len(svc.names("play")) == 2  # no back-off took place
