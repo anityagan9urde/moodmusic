@@ -754,3 +754,28 @@ def test_is_playing_follows_playback_and_pause(tmp_path):
     svc.pb = None
     eng.tick()
     assert eng.is_playing is False
+
+
+def test_warns_when_spotify_accepts_play_but_loads_nothing(tmp_path):
+    from moodmusic.app.engine import STALE_TICKS
+    eng, svc, _ = make(tmp_path)
+    eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
+    uri = svc.names("play")[-1][0]
+    svc.pb = PlaybackInfo(None, 0, 0, False, "dev")  # device woke up, no song loaded
+    for _ in range(STALE_TICKS + 1):
+        eng.tick()
+    assert eng.status.kind == "warning"
+    assert "press play" in eng.status.message.lower()
+    svc.pb = pb(uri)
+    eng.tick()
+    assert eng.status.kind == "ok"
+
+
+def test_no_ignored_warning_while_spotify_catches_up(tmp_path):
+    eng, svc, _ = make(tmp_path)
+    eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
+    svc.pb = PlaybackInfo(None, 0, 0, False, "dev")
+    eng.tick()
+    assert eng.status.kind == "ok"

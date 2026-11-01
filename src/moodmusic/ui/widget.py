@@ -18,6 +18,7 @@ from moodmusic.ui.mood_picker import MoodPicker
 class MoodWidget(QWidget):
     switch_view = Signal(str)
     login_requested = Signal()
+    quit_requested = Signal()
 
     def __init__(self, engine, worker, clock: Callable[[], float] = time.monotonic,
                  save: Callable[[Settings], None] = save_settings) -> None:
@@ -47,6 +48,12 @@ class MoodWidget(QWidget):
         top.addLayout(col, 1)
         top.addWidget(self.mode_toggle)
         top.addWidget(self.dot)
+        self.quit_btn = QPushButton("✕")
+        self.quit_btn.setObjectName("flat")
+        self.quit_btn.setToolTip("Quit Mood Music (stops the camera)")
+        self.quit_btn.setFixedSize(22, 22)
+        self.quit_btn.clicked.connect(self.quit_requested.emit)
+        top.addWidget(self.quit_btn)
 
         self.art = ArtLabel(34)
         self.title_label = QLabel("Nothing playing")
@@ -158,8 +165,9 @@ class MoodWidget(QWidget):
         p.drawRoundedRect(self.rect(), 14, 14)
 
     def closeEvent(self, event) -> None:
-        event.ignore()
-        self.hide()
+        # Closing means quit: no hidden background run, the camera is released.
+        event.accept()
+        self.quit_requested.emit()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

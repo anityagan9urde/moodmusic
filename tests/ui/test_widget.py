@@ -164,3 +164,14 @@ def test_pause_button_reflects_playback(qtbot, engine, worker):
     engine.is_playing = True
     engine.notify()
     assert w.pause_btn.toolTip() == "Pause"
+
+
+def test_widget_close_button_quits_the_app(qtbot, engine, worker):
+    from moodmusic.ui.widget import MoodWidget
+    w = MoodWidget(engine, worker, save=lambda s: None)
+    qtbot.addWidget(w)
+    assert w.quit_btn.toolTip() == "Quit Mood Music (stops the camera)"
+    with qtbot.waitSignal(w.quit_requested, timeout=500):
+        w.quit_btn.click()
+    with qtbot.waitSignal(w.quit_requested, timeout=500):
+        w.close()

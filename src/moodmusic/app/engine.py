@@ -36,6 +36,7 @@ NO_DEVICE = "Open Spotify on any device"
 CHOOSE_DEVICE = "Choose a Spotify device"
 AUTH_EXPIRED = "Spotify login expired. Please log in again"
 SLOW_DOWN = "Spotify asked us to slow down. Retrying…"
+SPOTIFY_IGNORED = "Spotify didn't start the song. Press play once in the Spotify app"
 _FAIL = object()  # sentinel: a Spotify call failed (status already updated)
 
 
@@ -101,6 +102,7 @@ class Engine:
         self._rate_limit = RateLimit(clock)
         self._err: EngineStatus | None = None
         self._crashed = False
+        self._ignored = False  # Spotify accepted our play() but loaded no song
 
     # ---- status -------------------------------------------------------
     @property
@@ -109,6 +111,8 @@ class Engine:
             return EngineStatus("error", "Something went wrong. Retrying…")
         if self._err is not None:
             return self._err
+        if self._ignored:
+            return EngineStatus("warning", SPOTIFY_IGNORED)
         if not self._quality.ok:
             return EngineStatus("warning", self._quality.issue or "Poor image quality")
         try:
@@ -279,6 +283,8 @@ class Engine:
         return True
 
     def _follow_playback(self, pb: PlaybackInfo | None) -> None:
+        if pb is None or pb.uri is not None:
+            self._ignored = False
         if pb is None:  # Spotify closed or idle: keep trying to resume our own flow
             if self._stale_ticks > 0:  # just played: give Spotify time to report it
                 self._stale_ticks -= 1
@@ -287,7 +293,11 @@ class Engine:
                 self._manual_uri = None
                 self._play_next()
             return
-        if pb.uri is None:
+        if pb.uri is None:  # device active but nothing loaded
+            if self._stale_ticks > 0:
+                self._stale_ticks -= 1  # just played: give Spotify time to load it
+            elif self.current_pick is not None and self._last_uri == self.current_pick.song.uri:
+                self._ignored = True  # our play() was accepted, then silently dropped
             return
         if pb.uri == self._stale_uri and self._stale_ticks > 0:
             self._stale_ticks -= 1  # Spotify has not caught up with our play() yet

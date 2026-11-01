@@ -182,3 +182,10 @@ def test_folding_testing_section_shrinks_window(qtbot, engine, worker):
     qtbot.waitUntil(lambda: d.height() > closed, timeout=1000)
     d.testing_toggle.click()
     qtbot.waitUntil(lambda: d.height() <= closed, timeout=1000)
+
+
+def test_closing_dashboard_quits_the_app(qtbot, engine, worker):
+    d = make(qtbot, engine, worker)
+    d.show()
+    with qtbot.waitSignal(d.quit_requested, timeout=500):
+        d.close()

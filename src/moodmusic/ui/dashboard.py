@@ -153,6 +153,7 @@ class SettingsChips(QWidget):
 class Dashboard(QWidget):
     switch_view = Signal(str)
     settings_requested = Signal()
+    quit_requested = Signal()
     review_requested = Signal()
     login_requested = Signal()
 
@@ -393,5 +394,6 @@ class Dashboard(QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event) -> None:
-        event.ignore()
-        self.hide()
+        # Closing means quit: no hidden background run, the camera is released.
+        event.accept()
+        self.quit_requested.emit()

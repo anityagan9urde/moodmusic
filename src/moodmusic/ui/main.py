@@ -373,6 +373,8 @@ def run() -> int:
     cleanup = make_cleanup(timer, worker, scan, library, login, tray)
     app.aboutToQuit.connect(cleanup)
     widget.login_requested.connect(login.start)
+    widget.quit_requested.connect(app.quit)
+    dashboard.quit_requested.connect(app.quit)
     dashboard.login_requested.connect(login.start)
     dashboard.settings_requested.connect(open_settings)
     dashboard.review_requested.connect(
