@@ -32,6 +32,7 @@ HISTORY_SECONDS = 3600
 HISTORY_STEP_S = 5  # at most one history point per 5 s
 NEAR_END_MS = 3000
 STALE_TICKS = 3
+RETRY_UNCONFIRMED_S = 30  # re-send a play() Spotify accepted but never started
 NO_DEVICE = "Open Spotify on any device"
 CHOOSE_DEVICE = "Choose a Spotify device"
 AUTH_EXPIRED = "Spotify login expired. Please log in again"
@@ -103,6 +104,7 @@ class Engine:
         self._err: EngineStatus | None = None
         self._crashed = False
         self._ignored = False  # Spotify accepted our play() but loaded no song
+        self._retried_at: float | None = None  # last re-send of an unconfirmed play()
 
     # ---- status -------------------------------------------------------
     @property
@@ -283,11 +285,21 @@ class Engine:
         return True
 
     def _follow_playback(self, pb: PlaybackInfo | None) -> None:
-        if pb is None or pb.uri is not None:
+        if pb is not None and pb.uri is not None:
             self._ignored = False
         if pb is None:  # Spotify closed or idle: keep trying to resume our own flow
             if self._stale_ticks > 0:  # just played: give Spotify time to report it
                 self._stale_ticks -= 1
+                return
+            if self._unconfirmed():  # play() accepted, song never started: don't skip it
+                self._ignored = True
+                now = self._clock()
+                if (self._can_act() and (self._retried_at is None
+                                         or now - self._retried_at >= RETRY_UNCONFIRMED_S)):
+                    self._retried_at = now
+                    log.info("engine: Spotify never started %s - sending play again",
+                             self._last_uri)
+                    self._start(self._last_uri)
                 return
             if self._last_uri is not None and self._can_act():
                 self._manual_uri = None
@@ -339,6 +351,11 @@ class Engine:
                 self._queued = pick
                 self._ours[pick.song.uri] = pick
 
+    def _unconfirmed(self) -> bool:
+        """Our latest play() was accepted but Spotify has never reported that song."""
+        return (self._seen is None and self._manual_uri is None and self.current_pick is not None
+                and self._last_uri == self.current_pick.song.uri)
+
     # ---- decisions ----------------------------------------------------
     def _can_act(self) -> bool:
         return (self._enabled and self._mood is not None and self._quality.ok and self._face
@@ -382,6 +399,7 @@ class Engine:
         self._last_uri = pick.song.uri
         self.current_pick, self._queued, self._manual_uri = pick, None, None
         self._seen = None
+        self._retried_at = None
         self._handled_state = self._mood.state if self._mood else None
         self.selector.mark_played(pick.song.uri, self._wall_clock())
         return True

@@ -779,3 +779,24 @@ def test_no_ignored_warning_while_spotify_catches_up(tmp_path):
     svc.pb = PlaybackInfo(None, 0, 0, False, "dev")
     eng.tick()
     assert eng.status.kind == "ok"
+
+
+def test_unconfirmed_play_is_retried_not_skipped(tmp_path):
+    """Spotify accepts play() but playback stays None: keep the same song and warn,
+    instead of burning a new song every few seconds."""
+    from moodmusic.app.engine import STALE_TICKS
+    eng, svc, clock = make(tmp_path)
+    eng.on_mood(mood(MoodGroup.CHILL))
+    eng.tick()
+    uri = svc.names("play")[-1][0]
+    for _ in range(STALE_TICKS * 10):
+        clock.t += 2.7
+        eng.tick()
+    plays = [p[0] for p in svc.names("play")]
+    assert set(plays) == {uri}  # never moved on to another song
+    assert len(plays) == 4  # first play + one retry per 30 s over ~81 s
+    assert eng.current_pick.song.uri == uri
+    assert eng.status.kind == "warning" and "press play" in eng.status.message.lower()
+    svc.pb = pb(uri)
+    eng.tick()
+    assert eng.status.kind == "ok"
