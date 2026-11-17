@@ -12,7 +12,6 @@ dependencies = [
   "hsemotion-onnx>=0.3",
   "onnxruntime>=1.18",
   "opencv-contrib-python>=4.8",  # also pulled in by mediapipe; do not add opencv-python (both provide cv2)
-  "PySide6>=6.6",
   "spotipy>=2.23",
   "requests>=2.31",
   "keyring>=24",
@@ -21,7 +20,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-qt", "pyinstaller"]
+# The desktop app. Without it the package is headless: vision, mood, music and Spotify only,
+# which is how JARVIS uses it.
+ui = ["PySide6>=6.6"]
+dev = ["PySide6>=6.6", "pytest", "pytest-qt", "pyinstaller"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

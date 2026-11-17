@@ -56,6 +56,8 @@ pip install -e ".[dev]"
 python -m moodmusic
 ```
 
+The window and tray need the `ui` extra (`dev` includes it). Without it the package installs headless, with the vision, mood, music and Spotify parts only. JARVIS uses it that way.
+
 On macOS/Linux use `python3.12 -m venv .venv` and `source .venv/bin/activate`. Run tests with `pytest` (set `QT_QPA_PLATFORM=offscreen` on headless machines).
 
 ### Build the app yourself
